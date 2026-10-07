@@ -119,6 +119,27 @@ def test_unlisted_background_requires_complete_authoritative_inventory(tmp_path)
                      workers=1, bandpass=None, expected_records=None)
 
 
+def test_positive_list_typo_reconciles_only_with_interval_and_sidecar_evidence(tmp_path):
+    root, output = tmp_path / "source", tmp_path / "shards"
+    splits = fixture_source(root)
+    # An official-style list omission cannot overrule interval + sidecar agreement.
+    positive = root / "RECORDS-WITH-SEIZURES"
+    positive.write_text("chb02/chb02_01.edf\nchb24/chb24_01.edf\n")
+    sums = []
+    for path in sorted(root.rglob("*")):
+        if path.is_file() and path.name != "SHA256SUMS.txt":
+            sums.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(root)}")
+    (root / "SHA256SUMS.txt").write_text("\n".join(sums) + "\n")
+    build_chbmit(root, output, splits, samples=128, sample_rate=128,
+                 workers=1, bandpass=None, expected_records=None)
+    records = json.loads((output / "records.json").read_text())["records"]
+    reconciled = records[1]
+    assert reconciled["annotation_known"] and reconciled["status"] == "ready"
+    assert reconciled["positive_list_disagreement"] and len(reconciled["events"]) == 1
+    audit = json.loads((output / "build_report.json").read_text())["inventory_audit"]
+    assert audit["positive_list_sidecar_disagreements"] == ["chb03/chb03_01.edf"]
+
+
 def test_pending_download_retry_and_no_final_statistics(tmp_path):
     root, output = tmp_path / "source", tmp_path / "shards"
     splits = fixture_source(root)

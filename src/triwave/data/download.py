@@ -308,8 +308,8 @@ def aria2_download(base: str | Path, binary: str = "aria2c", concurrent_files: i
                "--min-split-size=8M", "--continue=true", "--check-integrity=true",
                "--file-allocation=none", "--auto-file-renaming=false", "--enable-color=false",
                "--summary-interval=10", "--download-result=hide", "--console-log-level=warn",
-               "--connect-timeout=15", "--timeout=30", "--lowest-speed-limit=256K",
-               "--retry-wait=2", "--max-tries=10",
+               "--connect-timeout=15", "--timeout=60", "--lowest-speed-limit=32K",
+               "--retry-wait=5", "--max-tries=0",
                f"--save-session={job.metadata / 'aria2-unfinished.txt'}", "--save-session-interval=30"]
     if not background:
         subprocess.run(command, check=True)

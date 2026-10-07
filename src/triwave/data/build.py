@@ -77,8 +77,9 @@ def _load_inventory(root: Path, expected_records: int | None) -> tuple[list[dict
         raise ValueError("seizure-file inventory contains unknown recordings")
     expected_annotations = {name.removesuffix(".seizures") for name in checksums
                             if name.endswith(".edf.seizures")}
-    if expected_annotations != positives:
-        raise ValueError("seizure-file list and SHA256 annotation inventory disagree")
+    if not expected_annotations.issubset(names):
+        raise ValueError("seizure sidecar inventory contains unknown recordings")
+    positive_list_disagreements = sorted(expected_annotations.symmetric_difference(positives))
     metadata_audit = {}
     for name in ("RECORDS", "RECORDS-WITH-SEIZURES", "SUBJECT-INFO"):
         path = root / name
@@ -119,15 +120,17 @@ def _load_inventory(root: Path, expected_records: int | None) -> tuple[list[dict
         annotation_error = summary_errors.get(case, "")
         if summary is not None:
             has_event = bool(summary.seizures)
-            if has_event != (name in positives):
-                annotation_error = "summary and official seizure-file list disagree"
+            if has_event != (name in expected_annotations):
+                annotation_error = "summary and official seizure-sidecar inventory disagree"
             else:
                 known = True
                 events = [{"event_id": f"CHB-MIT:{name}:seizure:{event_index}",
                            "onset": event.onset, "offset": event.offset}
                           for event_index, event in enumerate(summary.seizures)]
-                annotation_source = "official_summary_and_seizure_file_list"
-        elif name not in positives and case not in summary_errors:
+                annotation_source = ("official_summary_and_seizure_sidecar_inventory_reconciled"
+                                     if name in positive_list_disagreements else
+                                     "official_summary_and_seizure_file_list")
+        elif name not in positives and name not in expected_annotations and case not in summary_errors:
             # The official page explicitly defines the positive-file list as all
             # files containing >=1 seizure. Both list and annotation inventory
             # were checked above; this is not an assumption from a missing sidecar.
@@ -139,12 +142,15 @@ def _load_inventory(root: Path, expected_records: int | None) -> tuple[list[dict
                           "record_id": f"CHB-MIT:{name}", "events": events,
                           "annotation_known": known, "annotation_source": annotation_source,
                           "annotation_error": annotation_error,
+                          "positive_list_disagreement": name in positive_list_disagreements,
                           "summary_present": summary is not None,
                           "summary_sample_rate": summary.sample_rate if summary is not None else None,
                           "summary_sha256": summary_hashes.get(case),
                           "annotation_semantics_source": ANNOTATION_SEMANTICS_URL})
     return inventory, {"source_edf_count": len(names), "positive_edf_count": len(positives),
                        "source_checksum_entries": len(checksums), "metadata_sha256": metadata_audit,
+                       "positive_list_sidecar_disagreements": positive_list_disagreements,
+                       "reconciliation_policy": "summary intervals and sidecar membership must agree; list differences retained",
                        "checksum_manifest_sha256": file_sha256(sums_path),
                        "auxiliary_missing_or_corrupt": auxiliary_errors,
                        "summary_errors": summary_errors,
