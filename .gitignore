@@ -1,0 +1,43 @@
+# Clinical data and derived caches belong outside Git.
+data/
+datasets/
+raw/
+processed/
+cache/
+reports/
+checkpoints/
+weights/
+runs/
+outputs/
+wandb/
+*.edf
+*.bdf
+*.fif
+*.set
+*.mat
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# Credentials and local environment.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Local generated artifacts.
+tmp/
+scratch/
