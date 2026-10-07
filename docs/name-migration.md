@@ -28,4 +28,6 @@ src/triwave、TriWaveModel、triwave CLI和triwave-morlet-v1继续作为v0.1兼�
 
 已核实 GitHub private；本机新前缀 Python 3.11.17 / Torch 2.8.0、editable distribution与新CLI、pip check通过。legion模型环境使用原有27个已提取Conda缓存包经官方clone/link流程迁移，Python 3.11 / Torch 2.8.0+cu128与CUDA可用。此迁移仅在一次进程中绕过失败的fetch步骤，没有修改Conda源码，没有重新下载PyTorch。旧前缀保留软链接以兼容历史脚本。
 
-迁移前commit为9badba58c146454db56fbbbff40e6f9c33ebb1be；src/scripts/tests/算法configs/依赖文件与该commit保持一致。文档本地链接与git diff --check通过。服务器editable安装、新CLI、下载工具、remote与最终HEAD将在同步后核验。
+迁移前commit为9badba58c146454db56fbbbff40e6f9c33ebb1be；src/scripts/tests/算法configs/依赖文件与该commit保持一致。文档本地链接与git diff --check通过。服务器editable安装指向新目录，旧distribution元数据已归档；新CLI的CUDA doctor与pip check通过。下载工具环境经原有15个缓存包迁移，aria2 1.37.0可执行，无网络重下载。两机conda run按新环境名启动成功；旧项目/数据/环境路径samefile检查通过。
+
+本机与legion的origin均指向新私有仓库；名称与设计提交37cb666已在两机同步。其后的本文件验收记录提交也通过push与服务器fast-forward同步核验。
