@@ -104,3 +104,5 @@ triwave sample --checkpoint runs/diffusion/last.pt --conditions /absolute/path/c
 - 当前条件生成训练要求目标导联和时间采样完整，检测到缺失会报错；允许参考模态缺失。三分支对齐可使用目标有效 mask。输出测量 mask 到生成器注意力的传播是后续可变 montage 扩展。
 
 依赖版本按平台记录在 requirements 文件。模型与数据代码为本仓库原创实现，论文借鉴和许可信息见 [related-work.md](related-work.md)。
+
+`requirements-lock-macos.txt` 和 `requirements-lock-cuda.txt` 保存本次实际环境的依赖快照；需要精确复现时使用对应平台快照，再安装本项目。验证记录见 [engineering-validation.md](engineering-validation.md)。

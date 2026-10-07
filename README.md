@@ -38,6 +38,7 @@ triwave smoke --config configs/tiny.yaml --device cpu
 | 文档 | 内容 |
 |---|---|
 | [开发与运行](docs/development.md) | Miniforge、平台依赖、CLI、数据准备、训练/恢复/采样与实现边界 |
+| [工程验证](docs/engineering-validation.md) | 本机/legion 实际测试、GPU 运行与证据边界 |
 | [模型架构](docs/architecture.md) | 张量接口、三分支、融合、生成器、损失、训练与推理、资源估算 |
 | [数据协议](docs/data-protocol.md) | 配对证据、标注粒度、导联、预处理、支持集与划分 |
 | [文献与迁移依据](docs/related-work.md) | 原始灵感、最近工作、可迁移机制、代码授权核查 |
