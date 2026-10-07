@@ -38,13 +38,19 @@ def make_synthetic_batch(config: ModelConfig, batch_size: int, seed: int = 0) ->
     attributes = torch.zeros(batch_size, config.attribute_dim)
     attributes_valid = torch.zeros_like(attributes, dtype=torch.bool)
     if config.attribute_dim:
-        attributes[:, 0] = frequencies / (config.sample_rate / 2)
+        attributes[:, 0] = frequencies
         attributes_valid[:, 0] = True
     return {"target_waveform": target, "target_valid": torch.ones(batch_size, config.channels, dtype=torch.bool),
             "reference_waveform": reference,
             "reference_valid": torch.ones(batch_size, config.channels, dtype=torch.bool),
             "lead_geometry": geometry, "input_ids": ids, "text_valid": masks,
             "attribute_values": attributes, "attribute_valid": attributes_valid, "class_ids": classes,
+            "alignment_metadata": [
+                {"instance_id": f"engineering:{seed}:{i}", "parent_id": f"engineering-parent:{seed}:{i}",
+                 "patient_id": f"engineering-only:{i}", "event_ids": [],
+                 "semantic_group": str(int(classes[i])), "namespace": "engineering.sinusoid_band",
+                 "scope": "engineering_window", "semantic_reliable": True, "negative_eligible": True}
+                for i in range(batch_size)],
             "metadata": {"synthetic": True, "label_namespace": "engineering.sinusoid_band",
                          "unit": "engineering_arbitrary", "geometry_source": "synthetic circle endpoints",
                          "reference_source": "independent phase and noise; shared user-specified frequency",

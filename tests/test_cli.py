@@ -87,8 +87,8 @@ def test_manifest_train_checkpoint_reference_sample_and_source_only_statistics(
     assert "query-extreme" not in saved.fit_sample_ids
     assert saved.count == 2 * config.channels * config.samples
     source_values = np.concatenate([waveform.astype(np.float64).ravel() for waveform in source_waveforms])
-    np.testing.assert_allclose(saved.mean, source_values.mean(), rtol=0, atol=1e-10)
-    np.testing.assert_allclose(saved.std, source_values.std(), rtol=1e-12)
+    np.testing.assert_allclose(saved.mean, 0.0, rtol=0, atol=1e-10)
+    np.testing.assert_allclose(saved.std, np.sqrt(np.mean(source_values**2)), rtol=1e-12)
 
     # Change the held-out patient's amplitude by four orders of magnitude. Both
     # the stored and freshly fitted statistics must still equal source-only values.
@@ -147,18 +147,18 @@ def test_doctor_and_smoke_resume_use_public_cli_api(tmp_path, monkeypatch, capsy
     assert doctor["clinical_pretraining"] is False
     assert doctor["parameters"] > 0
     output = tmp_path / "smoke"
-    first = run_cli(monkeypatch, capsys, "smoke", "--device", "cpu", "--objective", "flow",
+    first = run_cli(monkeypatch, capsys, "smoke", "--device", "cpu", "--objective", "diffusion",
                     "--steps", "1", "--sampling-steps", "2", "--output", output)[-1]
     assert first["status"] == "ok" and first["step"] == 1
     assert first["data_kind"] == "synthetic_engineering_check"
     checkpoint = output / "last.pt"
     restored = Trainer.load(checkpoint, resume_optimizer=True)
-    assert restored.normalization is None and restored.training.objective == "flow"
+    assert restored.normalization is None and restored.training.objective == "diffusion"
     resumed = tmp_path / "smoke-resumed"
     second = run_cli(monkeypatch, capsys, "smoke", "--device", "cpu", "--resume", checkpoint,
                      "--steps", "1", "--sampling-steps", "2", "--output", resumed)[-1]
     assert second["status"] == "ok" and second["step"] == 2
-    assert second["objective"] == "flow"  # Resume keeps the saved probability path.
+    assert second["objective"] == "diffusion"  # Resume keeps the saved probability path.
     with np.load(resumed / "generated.npz", allow_pickle=False) as archive:
         assert str(archive["units"]) == "synthetic_arbitrary_units"
         assert "no clinical efficacy measured" in str(archive["provenance"])

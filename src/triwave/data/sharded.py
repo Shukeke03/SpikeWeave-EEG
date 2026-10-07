@@ -45,6 +45,8 @@ class ShardedEEGDataset(Dataset):
                 or self.config.samples != self.protocol["window_samples"]
                 or not np.isclose(self.config.sample_rate, self.protocol["sample_rate"])):
             raise ValueError("shard measurement definition does not match model config")
+        if self.config.montage_mode != "off" and tuple(self.protocol["lead_names"]) != tuple(self.config.lead_names):
+            raise ValueError("configured montage lead order disagrees with shard measurement metadata")
         self.window_index = np.load(self.root / "window_index.npy", mmap_mode="r", allow_pickle=False)
         if self.window_index.dtype != INDEX_DTYPE:
             raise ValueError("unsupported window index dtype")
@@ -146,6 +148,15 @@ class ShardedEEGDataset(Dataset):
                 "attribute_values": torch.zeros(self.config.attribute_dim),
                 "attribute_valid": torch.zeros(self.config.attribute_dim, dtype=torch.bool),
                 "class_ids": torch.tensor(int(row["label"]), dtype=torch.long),
+                "alignment_metadata": {
+                    "instance_id": f"{record['record_id']}:{int(row['offset'])}",
+                    "parent_id": record["source_sha256"],
+                    "patient_id": record["canonical_subject_id"],
+                    "event_ids": [event["event_id"] for event in events],
+                    "semantic_group": "annotated_seizure" if seizure else "no_annotated_seizure",
+                    "namespace": "chbmit.window_event", "scope": f"{self.config.samples/self.config.sample_rate:g}s_window_annotation_overlap",
+                    "semantic_reliable": True, "negative_eligible": True,
+                },
                 "metadata": {"sample_id": f"{record['record_id']}:{int(row['offset'])}",
                              "unit": "normalized_uV" if self.normalizer else "uV", "target_unit": "uV",
                              "split": record["split"], "role": record["role"], "start_seconds": start,
@@ -215,6 +226,6 @@ def fit_sharded_statistics(dataset_or_root: ShardedEEGDataset | str | Path,
     variance = max(total_sq / count - mean * mean, 0.0)
     if variance <= 1e-12:
         raise ValueError("source training waveforms have zero variance")
-    return TrainNormalizer(mean=mean, std=float(np.sqrt(variance)), count=count,
+    return TrainNormalizer(mean=0.0, std=float(np.sqrt(total_sq / count)), count=count,
                            fit_manifest_digest=sharded_normalizer_digest(dataset),
                            fit_sample_ids=tuple(fitted_ranges))

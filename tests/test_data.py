@@ -239,3 +239,23 @@ def test_attach_source_references_insufficient_candidates_and_protocol_rejection
     manifest = write_manifest(records, tmp_path / "few-shot.jsonl")
     with pytest.raises(ValueError, match="source-only protocol only"):
         attach_source_references(manifest)
+
+
+def test_scalar_normalization_keeps_cycle_closure_and_detects_legacy_affine():
+    from triwave.montage import MontageSubspace
+
+    waveform = np.arange(24, dtype=np.float32).reshape(3, 8)
+    waveform[2] = waveform[0] + waveform[1]
+    record = sample()
+    record.lead_names = ["A-B", "B-C", "A-C"]
+    record.lead_valid = [True, True, True]
+    normalizer = TrainNormalizer().fit([record], lambda _: waveform)
+    assert normalizer.mean == 0 and normalizer.scale_protocol == "source_rms_v2"
+    normalized = normalizer.transform(waveform)
+    montage = MontageSubspace.from_endpoints(torch.tensor([[0, 1], [1, 2], [0, 2]]))
+    assert montage.audit(torch.from_numpy(normalized)[None])["passed"]
+    payload = normalizer.to_dict()
+    payload.pop("scale_protocol")
+    payload["mean"] = 1.0
+    legacy = TrainNormalizer.from_dict(payload)
+    assert legacy.scale_protocol == "legacy_affine_v1"

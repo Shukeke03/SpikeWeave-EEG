@@ -1,4 +1,4 @@
-"""Explicitly separate target-only alignment and inference-only generation."""
+"""SpikeWeave: exactly two representation branches, plus continuous MCWave."""
 
 from __future__ import annotations
 
@@ -6,96 +6,166 @@ import torch
 from torch import Tensor, nn
 
 from triwave.config import ModelConfig
+from triwave.montage import MontageSubspace
 from triwave.types import AlignmentOutput, ConditionBatch, FusedCondition
 
-from .denoiser import WaveDiT
-from .encoders import StructureEncoder, TemporalLeadEncoder, TextEncoder, check_geometry
-from .fusion import ConditionFusion
+from .attention import masked_mean
+from .denoiser import MCWave
+from .encoders import check_geometry
+from .snn import SpikingEEGEncoder
+from .vision_language import SharedVisionLanguageEncoder
 
 
-class TriWaveModel(nn.Module):
+class SpikeWeaveModel(nn.Module):
     def __init__(self, config: ModelConfig):
         super().__init__()
         config.validate()
         self.config = config
-        self.band_lengths = (config.samples // 2 ** config.wavelet_levels,
-                             *(config.samples // 2 ** level for level in range(config.wavelet_levels, 0, -1)))
-        self.waveform_encoder = TemporalLeadEncoder(config)
-        self.structure_encoder = StructureEncoder(config)
-        self.text_encoder = TextEncoder(config)
-        self.fusion = ConditionFusion(config)
-        self.denoiser = WaveDiT(config, self.band_lengths)
+        self.band_lengths = (
+            config.samples // 2**config.wavelet_levels,
+            *(config.samples // 2**level for level in range(config.wavelet_levels, 0, -1)),
+        )
+        self.eeg_encoder = SpikingEEGEncoder(config)
+        self.condition_encoder = SharedVisionLanguageEncoder(config)
+        self.geometry_projection = nn.Linear(6, config.condition_dim)
+        self.denoiser = MCWave(config, self.band_lengths)
 
-    def encode_conditions(self, conditions: ConditionBatch, drop_text: bool = False,
-                          drop_structure: bool = False, drop_reference: bool = False,
-                          drop_attributes: bool = False) -> FusedCondition:
-        """Accept only legal condition fields; never accepts a clean generation target.
+    @property
+    def waveform_encoder(self):
+        """Legacy access to E; does not register another encoder."""
+        return self.eeg_encoder
 
-        Drop flags replace complete branch outputs before all fusion/FiLM paths.
-        Mandatory measurement geometry remains available in the unconditional arm.
-        """
-        batch = conditions.batch_size
-        check_geometry(conditions.lead_geometry, batch, self.config.channels)
-        if conditions.reference_waveform is None or drop_reference:
-            reference = self.waveform_encoder.null_output(batch)
-        else:
-            reference = self.waveform_encoder(conditions.reference_waveform,
-                                              conditions.lead_geometry, conditions.reference_valid)
-        if conditions.structure is None or drop_structure:
-            structure = self.structure_encoder.null_output(batch)
-        else:
-            structure = self.structure_encoder(conditions.structure, conditions.structure_valid,
-                                                conditions.lead_geometry)
-        if conditions.input_ids is None or drop_text:
-            text = self.text_encoder.null_output(batch)
-        else:
-            text = self.text_encoder(conditions.input_ids, conditions.text_valid)
-        values = None if drop_attributes else conditions.attribute_values
-        valid = None if drop_attributes else conditions.attribute_valid
-        return self.fusion(reference, structure, text, values, valid, conditions.lead_geometry)
+    def encode_conditions(
+        self,
+        conditions: ConditionBatch,
+        drop_text: bool = False,
+        drop_structure: bool = False,
+        drop_reference: bool = False,
+        drop_attributes: bool = False,
+    ) -> FusedCondition:
+        check_geometry(conditions.lead_geometry, conditions.batch_size, self.config.channels)
+        c = self.condition_encoder(
+            None if drop_structure else conditions.structure,
+            None if drop_structure else conditions.structure_valid,
+            None if drop_text else conditions.input_ids,
+            None if drop_text else conditions.text_valid,
+            lead_geometry=conditions.lead_geometry,
+            attribute_values=None if drop_attributes else conditions.attribute_values,
+            attribute_valid=None if drop_attributes else conditions.attribute_valid,
+        )
+        reference = (
+            self.eeg_encoder.null_output(conditions.batch_size)
+            if conditions.reference_waveform is None or drop_reference
+            else self.eeg_encoder(
+                conditions.reference_waveform, conditions.lead_geometry, conditions.reference_valid
+            )
+        )
+        geometry = self.geometry_projection(conditions.lead_geometry.to(c.tokens.dtype))
+        tokens = torch.cat((c.tokens, reference.tokens, geometry), 1)
+        valid = torch.cat(
+            (
+                c.valid,
+                reference.valid,
+                torch.ones(geometry.shape[:2], device=tokens.device, dtype=torch.bool),
+            ),
+            1,
+        )
+        return FusedCondition(tokens, valid, masked_mean(tokens, valid, 1))
 
-    def alignment(self, target_waveform: Tensor, target_structure: Tensor,
-                  target_structure_valid: Tensor | None, input_ids: Tensor | None,
-                  text_valid: Tensor | None, lead_geometry: Tensor,
-                  lead_valid: Tensor | None = None) -> AlignmentOutput:
-        """Three independent projections before text FiLM or multimodal fusion."""
-        eeg = self.waveform_encoder(target_waveform, lead_geometry, lead_valid)
-        if target_structure_valid is None:
-            target_structure_valid = torch.ones_like(target_structure, dtype=torch.bool)
+    def alignment(
+        self,
+        target_waveform: Tensor,
+        target_structure: Tensor,
+        target_structure_valid: Tensor | None,
+        input_ids: Tensor | None,
+        text_valid: Tensor | None,
+        lead_geometry: Tensor,
+        lead_valid: Tensor | None = None,
+    ) -> AlignmentOutput:
+        e = self.eeg_encoder(target_waveform, lead_geometry, lead_valid)
+        sv = (
+            torch.ones_like(target_structure, dtype=torch.bool)
+            if target_structure_valid is None
+            else target_structure_valid
+        )
         if lead_valid is not None:
-            if lead_valid.ndim == 3:
-                lead_presence = lead_valid.any(-1)
-            else:
-                lead_presence = lead_valid
-            target_structure_valid = target_structure_valid & lead_presence[..., None, None]
-        structure = self.structure_encoder(target_structure, target_structure_valid, lead_geometry)
-        text = (self.text_encoder.null_output(target_waveform.shape[0]) if input_ids is None
-                else self.text_encoder(input_ids, text_valid))
-        eeg_valid = (torch.ones(target_waveform.shape[0], dtype=torch.bool, device=target_waveform.device)
-                     if lead_valid is None else lead_valid.flatten(1).any(-1))
-        if input_ids is None:
-            text_presence = torch.zeros(target_waveform.shape[0], dtype=torch.bool,
-                                        device=target_waveform.device)
-        else:
-            text_presence = (torch.ones(input_ids.shape[0], dtype=torch.bool, device=input_ids.device)
-                             if text_valid is None else text_valid.any(-1))
-        return AlignmentOutput(eeg=eeg.pooled, structure=structure.pooled, text=text.pooled,
-                               eeg_valid=eeg_valid,
-                               structure_valid=target_structure_valid.flatten(1).any(-1),
-                               text_valid=text_presence)
+            lv = lead_valid.any(-1) if lead_valid.ndim == 3 else lead_valid
+            sv = sv & lv[..., None, None]
+        joint = self.condition_encoder(
+            target_structure, sv, input_ids, text_valid, lead_geometry=lead_geometry
+        )
+        text = self.condition_encoder(
+            input_ids=input_ids, text_valid=text_valid, lead_geometry=lead_geometry
+        )
+        image = self.condition_encoder(target_structure, sv, lead_geometry=lead_geometry)
+        return AlignmentOutput(
+            e.semantic,
+            e.structural,
+            joint.semantic,
+            text.semantic,
+            image.structural,
+            e.present,
+            joint.semantic_valid & joint.structural_valid,
+            text.semantic_valid,
+            image.structural_valid,
+        )
 
-    def forward(self, noisy_coefficients: Tensor, time: Tensor,
-                conditions: ConditionBatch | FusedCondition,
-                lead_geometry: Tensor | None = None, **drop_flags: bool) -> Tensor:
+    def montage(self, device=None) -> MontageSubspace | None:
+        if self.config.montage_mode == "off":
+            return None
+        names = self.config.lead_names
+        if len(names) != self.config.channels:
+            raise ValueError(
+                "montage audit requires configured explicit lead_names matching channel order"
+            )
+        electrodes = sorted({name for lead in names for name in lead.split("-")})
+        if any(len(lead.split("-")) != 2 for lead in names):
+            raise ValueError(
+                "lead_names must explicitly identify positive-negative electrode pairs"
+            )
+        endpoints = torch.tensor(
+            [[electrodes.index(name) for name in lead.split("-")] for lead in names],
+            device=device,
+            dtype=torch.long,
+        )
+        return MontageSubspace.from_endpoints(
+            endpoints, max_relative_residual=self.config.montage_residual_tolerance
+        ).to(device)
+
+    def predict_clean(
+        self,
+        state: Tensor,
+        time: Tensor,
+        condition: FusedCondition,
+        lead_geometry: Tensor,
+        basis: MontageSubspace | None = None,
+    ) -> Tensor:
+        physical = state if basis is None else basis.lift(state)
+        prediction = self.denoiser(physical, time, condition, lead_geometry)
+        return prediction if basis is None else basis.reduce(prediction, require_audit=False)
+
+    def forward(
+        self,
+        noisy_coefficients: Tensor,
+        time: Tensor,
+        conditions: ConditionBatch | FusedCondition,
+        lead_geometry: Tensor | None = None,
+        **drop_flags: bool,
+    ) -> Tensor:
         if isinstance(conditions, ConditionBatch):
-            condition = self.encode_conditions(conditions, **drop_flags)
+            fused = self.encode_conditions(conditions, **drop_flags)
             lead_geometry = conditions.lead_geometry
         elif isinstance(conditions, FusedCondition):
             if drop_flags:
                 raise ValueError("apply modality dropout before fusion")
-            condition = conditions
+            fused = conditions
         else:
-            raise TypeError("generation accepts a ConditionBatch or FusedCondition, not target tensors")
+            raise TypeError(
+                "generation accepts explicit legal conditions, never a clean target tensor"
+            )
         if lead_geometry is None:
             raise ValueError("generation requires explicit lead geometry")
-        return self.denoiser(noisy_coefficients, time, condition, lead_geometry)
+        return self.denoiser(noisy_coefficients, time, fused, lead_geometry)
+
+
+TriWaveModel = SpikeWeaveModel  # import compatibility; old checkpoints are rejected

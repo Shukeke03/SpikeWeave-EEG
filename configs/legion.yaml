@@ -4,19 +4,19 @@ model:
   sample_rate: 256.0
   wavelet: db4
   wavelet_levels: 3
-  waveform_patch: 32
-  coefficient_patch: 32
-  dim: 96
+  waveform_patch: 16
+  coefficient_patch: 16
+  dim: 64
   encoder_depth: 2
   heads: 4
-  structure_base_dim: 16
+  structure_base_dim: 8
   structure_depths:
   - 1
   - 1
   - 1
   structure_window: 4
-  structure_frequency_patch: 4
-  structure_time_patch: 8
+  structure_frequency_patch: 2
+  structure_time_patch: 2
   structure_frequency_bins: 2
   condition_time_bins: 4
   cwt_frequencies: 64
@@ -28,12 +28,51 @@ model:
   text_local_files_only: true
   freeze_text: true
   text_vocab_size: 4096
-  text_max_length: 64
-  text_depth: 2
-  fusion_depth: 2
+  text_max_length: 16
+  text_depth: 1
+  fusion_depth: 1
   attribute_dim: 8
-  denoiser_dim: 128
+  denoiser_dim: 64
   denoiser_heads: 4
-  denoiser_depth: 4
+  denoiser_depth: 2
   dropout: 0.0
   projection_dim: 64
+  lead_names:
+  - FP1-F7
+  - F7-T7
+  - T7-P7
+  - P7-O1
+  - FP2-F8
+  - F8-T8
+  - T8-P8
+  - P8-O2
+  - FP1-F3
+  - F3-C3
+  - C3-P3
+  - P3-O1
+  - FP2-F4
+  - F4-C4
+  - C4-P4
+  - P4-O2
+  condition_dim: 64
+  condition_heads: 4
+  projection_hidden_dim: 128
+  snn_chunk_sizes:
+  - 4
+  - 8
+  snn_drop_path: 0.0
+  representation_dropout: 0.0
+  frontend_backend: offline
+  biomedclip_checkpoint: microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224
+  biomedclip_local_path: null
+  frontend_text_config_path: null
+  visual_depth: 1
+  visual_heads: 4
+  visual_patch: 16
+  image_summary_tokens: 8
+  montage_mode: audit
+  montage_residual_tolerance: 0.01
+training:
+  warmup_steps: 0
+  mixed_precision: true
+  effective_batch_size: 0

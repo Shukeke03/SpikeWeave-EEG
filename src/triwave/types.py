@@ -14,6 +14,13 @@ class BranchOutput:
     pooled: Tensor
     scales: tuple[Tensor, ...] = ()
     scale_valid: tuple[Tensor, ...] = ()
+    semantic: Tensor | None = None
+    structural: Tensor | None = None
+    present: Tensor | None = None
+    semantic_valid: Tensor | None = None
+    structural_valid: Tensor | None = None
+    reconstruction: Tensor | None = None
+    patch_mask: Tensor | None = None
 
 
 @dataclass
@@ -41,15 +48,32 @@ class ConditionBatch:
     attribute_valid: Tensor | None = None
 
     def to(self, device: str) -> ConditionBatch:
-        return replace(self, **{f.name: getattr(self, f.name).to(device)
-                               for f in fields(self) if isinstance(getattr(self, f.name), Tensor)})
+        return replace(
+            self,
+            **{
+                f.name: getattr(self, f.name).to(device)
+                for f in fields(self)
+                if isinstance(getattr(self, f.name), Tensor)
+            },
+        )
 
 
 @dataclass
 class AlignmentOutput:
     eeg: Tensor
-    structure: Tensor
+    eeg_structure: Tensor
+    joint: Tensor
     text: Tensor
+    image: Tensor
     eeg_valid: Tensor
-    structure_valid: Tensor
+    joint_valid: Tensor
     text_valid: Tensor
+    image_valid: Tensor
+
+    @property
+    def structure(self) -> Tensor:
+        return self.image
+
+    @property
+    def structure_valid(self) -> Tensor:
+        return self.image_valid

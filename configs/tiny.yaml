@@ -37,3 +37,40 @@ model:
   denoiser_depth: 2
   dropout: 0.0
   projection_dim: 32
+  lead_names:
+  - FP1-F7
+  - F7-T7
+  - T7-P7
+  - P7-O1
+  - FP2-F8
+  - F8-T8
+  - T8-P8
+  - P8-O2
+  - FP1-F3
+  - F3-C3
+  - C3-P3
+  - P3-O1
+  - FP2-F4
+  - F4-C4
+  - C4-P4
+  - P4-O2
+  condition_dim: 32
+  condition_heads: 4
+  projection_hidden_dim: 64
+  snn_chunk_sizes:
+  - 4
+  snn_drop_path: 0.0
+  representation_dropout: 0.0
+  frontend_backend: offline
+  biomedclip_checkpoint: microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224
+  biomedclip_local_path: null
+  frontend_text_config_path: null
+  visual_depth: 1
+  visual_heads: 4
+  visual_patch: 4
+  image_summary_tokens: 8
+  montage_mode: 'off'
+  montage_residual_tolerance: 0.01
+training:
+  warmup_steps: 0
+  effective_batch_size: 0

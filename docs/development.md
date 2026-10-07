@@ -1,3 +1,5 @@
+> 本文命令是历史v0.1记录，新代码请使用[implementation-v0.2.md](implementation-v0.2.md)。旧flow与三分支入口不再是主训练流程。
+
 # 开发与运行
 
 状态：项目与环境已更名为 SpikeWeave-EEG。以下运行命令仍对应 v0.1 三分支原型；已确立的 SNN / 图文双分支与新损失尚未实现。新的 `spikeweave` CLI 与原 `triwave` CLI 暂时指向同一兼容实现，内部 Python namespace 和 `triwave-morlet-v1` 数据协议保持不变。当前架构见 [architecture.md](architecture.md)，固定对比协议见 [contrastive-protocol.md](contrastive-protocol.md)。

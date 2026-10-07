@@ -8,8 +8,9 @@ SpikeWeave-EEG 是医学 EEG 条件生成与患者独立少样本增强的私有
 
 ## 当前状态
 
-2026-10-07：完成项目名称和运行路径迁移，确立双分支架构与多正例双向对比协议。此次未修改模型、损失或数据处理算法。当前 Python 实现仍是 v0.1 三分支工程原型；SNN、共享图文分支和 MCWave 新目标将在下一阶段实现。工程验证与临床性能分别记录，不能把旧原型测试当作新模型结果。
+2026-10-07：已实现v0.2双分支、固定对比协议与MCWave干净预测扩散。具备SNN遮挡重构、共享图文交互、导联残差门槛、六类约束、训练阶段/累积/EMA与格式2检查点。工程测试与临床研究结论分别记录；尚未训练正式临床模型或证明生成有效性。
 
+[实现与运行指南](docs/implementation-v0.2.md)说明正式配置、BiomedCLIP权重准备、三个训练阶段及兼容边界。
 - EEG 分支：STAtten-8-512 的 EEG 适配版，PLIF、真实物理时间推进、脉冲与膜电位联合读出。
 - 图文分支：BiomedCLIP 前端和六层共享 Transformer；文本、图像及其联合输入共享同一 C 分支。
 - 固定对比学习：语义与结构两个读出头，多正例逐正例 log-softmax、双向平均、未知关系掩码。
@@ -30,7 +31,7 @@ cd /Users/shuxing/AIlearning/SpikeWeave-EEG
 spikeweave doctor --config configs/tiny.yaml --device cpu
 ```
 
-`spikeweave` 暂时调用已有 `triwave.cli` 实现，旧 `triwave` 命令继续兼容。`src/triwave`、旧检查点、`triwave-morlet-v1` 数据协议和 v0.1 算法配置本轮不改。旧绝对目录由兼容软链接保留，已有数据索引无需因品牌更名重新生成。
+正式类为`SpikeWeaveModel`，公共API为`from spikeweave import ...`。`triwave`模块/命令与`TriWaveModel`保留兼容别名。旧检查点不能加载为新目标，需重新训练。物理分片和`triwave-morlet-v1`数值变换继续兼容；新归一化采用不减均值的源RMS标量。旧目录软链接继续保留。
 
 ## 设计与记录
 
@@ -39,7 +40,8 @@ spikeweave doctor --config configs/tiny.yaml --device cpu
 | [architecture.md](docs/architecture.md) | 已确立的双分支与 MCWave 架构 |
 | [contrastive-protocol.md](docs/contrastive-protocol.md) | 固定对比学习数学定义与关系规则 |
 | [name-migration.md](docs/name-migration.md) | 本机、服务器、GitHub与环境的更名映射 |
-| [development.md](docs/development.md) | 当前兼容原型运行方法 |
+| [implementation-v0.2.md](docs/implementation-v0.2.md) | 当前实现、运行方法和验证边界 |
+| [development.md](docs/development.md) | 历史v0.1运行记录 |
 | [dataset-chbmit-v1.md](docs/dataset-chbmit-v1.md) | 数据下载、处理及监控命令 |
 | [data-protocol.md](docs/data-protocol.md) | 数据来源、物理单位、划分和合法条件 |
 | [experiments.md](docs/experiments.md) | 固定实验与反证标准 |

@@ -22,7 +22,7 @@ def test_partial_pipeline_never_fits_statistics(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline, "fit_sharded_statistics", unexpected_fit)
     state = pipeline.run_pipeline(tmp_path, ModelConfig.tiny(), max_passes=1)
     assert state["state"] == "waiting_for_download"
-    assert not (tmp_path / "processed/v1/train_normalizer.json").exists()
+    assert not (tmp_path / "processed/v1/train_scale_v2.json").exists()
 
 
 def test_processing_failure_requires_attention(tmp_path, monkeypatch):
@@ -69,4 +69,4 @@ def test_completed_pipeline_requires_numerical_acceptance(tmp_path, monkeypatch)
     })
     state = pipeline.run_pipeline(tmp_path, ModelConfig.tiny(), max_passes=1)
     assert state["state"] == "complete"
-    assert (tmp_path / "processed/v1/train_normalizer.json").is_file()
+    assert (tmp_path / "processed/v1/train_scale_v2.json").is_file()

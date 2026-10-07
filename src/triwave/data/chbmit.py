@@ -340,7 +340,9 @@ def prepare_chbmit(root: str | Path, output: str | Path, split_map: dict[str, st
                                    "target_derived": False, "inference_available": True,
                                    "supported_label": label},
                           "class": {"id": int(bool(annotations)), "namespace": "chbmit.window_event",
-                                    "label": label, "source": "official_event_annotation"}}
+                                    "label": label, "source": "official_event_annotation",
+                                    "scope": f"{window_seconds:g}s_window_annotation_overlap", "reliable": True,
+                                    "negative_eligible": True}}
             records.append(SampleRecord(
                 sample_id, "CHB-MIT", subject, record_id,
                 str(sample_path.relative_to(output)), start, end, target_sfreq,

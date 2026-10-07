@@ -89,7 +89,9 @@ def _groups(index: np.ndarray, records: int) -> list[np.ndarray]:
 
 def _normalizer(root: Path, records: list[dict], ready: np.ndarray,
                 groups: list[np.ndarray], protocol: dict, error) -> tuple[dict, TrainNormalizer | None]:
-    path = root / "normalizer.json"
+    path = root / "train_scale_v2.json"
+    if not path.is_file():
+        path = root / "normalizer.json"
     if not path.is_file():
         alternate = root / "train_normalizer.json"
         if alternate.is_file():
@@ -140,6 +142,8 @@ def _normalizer(root: Path, records: list[dict], ready: np.ndarray,
                 "expected_source_train_count": expected_count, "mean_uV": normalizer.mean,
                 "std_uV": normalizer.std, "fit_range_count": len(normalizer.fit_sample_ids),
                 "fit_record_count": len(ranges), "source_only": True,
+                "scale_protocol": normalizer.scale_protocol,
+                "v02_diffusion_compatible": normalizer.scale_protocol == "source_rms_v2",
                 "fit_manifest_digest": normalizer.fit_manifest_digest,
                 "fitted_during_audit": False}, normalizer
     except (OSError, ValueError, KeyError, TypeError) as exception:

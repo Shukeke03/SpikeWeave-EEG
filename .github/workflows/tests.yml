@@ -11,8 +11,8 @@ jobs:
         with:
           python-version: '3.11'
           cache: pip
-      - run: python -m pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+      - run: python -m pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cpu
       - run: python -m pip install -r requirements-common.txt
-      - run: python -m pip install -e . --no-deps
+      - run: python -m pip install -e ".[medical]"
       - run: python -m ruff check .
       - run: python -m pytest -q

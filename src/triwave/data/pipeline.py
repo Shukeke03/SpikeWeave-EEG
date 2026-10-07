@@ -53,9 +53,9 @@ def run_pipeline(base: str | Path, config: ModelConfig, *, split_map: str | Path
                     state["state"] = "fitting_training_statistics"
                     _atomic_json(status_path, state)
                     normalizer = fit_sharded_statistics(output, config)
-                    temporary = output / "train_normalizer.json.partial"
+                    temporary = output / "train_scale_v2.json.partial"
                     normalizer.save(temporary)
-                    os.replace(temporary, output / "train_normalizer.json")
+                    os.replace(temporary, output / "train_scale_v2.json")
                     state["state"] = "auditing"
                     _atomic_json(status_path, state)
                     audit = validate_sharded_dataset(output, config=config,
