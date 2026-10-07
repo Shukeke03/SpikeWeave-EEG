@@ -1,0 +1,8 @@
+name: triwave-eeg
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  # Install the platform-specific torch wheel before editable installation.
+  # See docs/development.md for macOS and CUDA commands.

@@ -1,15 +1,15 @@
 # Clinical data and derived caches belong outside Git.
-data/
-datasets/
-raw/
-processed/
-cache/
-reports/
-checkpoints/
-weights/
-runs/
-outputs/
-wandb/
+/data/
+/datasets/
+/raw/
+/processed/
+/cache/
+/reports/
+/checkpoints/
+/weights/
+/runs/
+/outputs/
+/wandb/
 *.edf
 *.bdf
 *.fif
@@ -35,6 +35,11 @@ wandb/
 .venv/
 venv/
 __pycache__/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
 *.py[cod]
 .DS_Store
 
