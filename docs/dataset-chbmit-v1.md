@@ -73,3 +73,11 @@ python3 src/triwave/data/download.py \
 预处理进程须通过 supervisor 或 `start_new_session=True` 持久启动以独立于 SSH 会话。流水线锁禁止双写；正在下载的 `.aria2` 文件标记 pending，不预先哈希；完成文件核验 SHA 后处理，后续轮次恢复已完成记录。只有所有源文件校验通过且无未解决处理失败，才拟合训练统计并最终验收。临时索引是 preview，正常训练入口拒绝不完整数据。
 
 验收检查所有索引、患者身份、标注和分片头信息；数值 DWT/IDWT、CWT 检查只读训练组16个窗口，保留锁定查询的数值评估。它不构成模型效果或临床有效性证据。原始与派生数据、报告、权重均不进入 Git。
+
+## 本机实时监控
+
+```bash
+ssh -t legion 'watch -n 2 python3 /home/shuxing/workspace/TriWave-EEG/scripts/monitor_legion.py'
+```
+
+每2秒显示完整文件体量/数量、最近下载速率、处理账本与验收状态、CPU/RAM/GPU与可用磁盘。下载完成量仅计完整文件，部分分段另有可恢复字节；最终校验以构建账本和验收为准。Ctrl+C 只退出监控，后台工作继续。正常训练读取已拟合统计并核对来源，避免重复扫描训练波形。

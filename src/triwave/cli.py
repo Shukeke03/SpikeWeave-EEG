@@ -104,7 +104,9 @@ def train_manifest(args: argparse.Namespace) -> None:
         config = _config(args)
         if sharded:
             raw_train = ShardedEEGDataset(shard_root, config=config, split="train")
-            normalizer = fit_sharded_statistics(raw_train)
+            fitted_path = shard_root / "train_normalizer.json"
+            normalizer = (TrainNormalizer.load(fitted_path) if fitted_path.is_file()
+                          else fit_sharded_statistics(raw_train))
         else:
             raw_train = EEGManifestDataset(args.manifest, config=config, split="train", role="source")
             normalizer = TrainNormalizer().fit(raw_train)
