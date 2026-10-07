@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 from collections import Counter
 from datetime import datetime
@@ -96,7 +97,8 @@ def show(base: Path) -> None:
     except (OSError, ValueError, KeyError):
         pass
     try:
-        gpu = subprocess.run(["nvidia-smi", "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu",
+        gpu_binary = shutil.which("nvidia-smi") or "/usr/lib/wsl/lib/nvidia-smi"
+        gpu = subprocess.run([gpu_binary, "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu",
                               "--format=csv,noheader"], capture_output=True, text=True, timeout=2)
         print(f"GPU: {gpu.stdout.strip() or 'unavailable'}")
     except (OSError, subprocess.TimeoutExpired):

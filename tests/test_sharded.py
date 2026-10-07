@@ -140,6 +140,37 @@ def test_positive_list_typo_reconciles_only_with_interval_and_sidecar_evidence(t
     assert audit["positive_list_sidecar_disagreements"] == ["chb03/chb03_01.edf"]
 
 
+def test_conflicting_duplicate_lead_is_audited_isolation_not_an_unresolved_failure(tmp_path):
+    import mne
+
+    from triwave.data.chbmit import UnsupportedMontageError, read_edf_bipolar
+
+    root, output = tmp_path / "source", tmp_path / "shards"
+    splits = fixture_source(root)
+    source = root / "chb02/chb02_01.edf"
+    source.unlink()
+    times = np.arange(512) / 128
+    channels = list(STANDARD_BIPOLAR_LEADS) + ["T8-P8"]
+    values = np.stack([10 * np.sin(2 * np.pi * 8 * times)] * 16 + [20 * np.sin(2 * np.pi * 12 * times)])
+    raw = mne.io.RawArray(values * 1e-6, mne.create_info(channels, 128, "eeg"), verbose="ERROR")
+    raw.export(source, fmt="edf", physical_range=(-100, 100), verbose="ERROR")
+    sums = []
+    for path in sorted(root.rglob("*")):
+        if path.is_file() and path.name != "SHA256SUMS.txt":
+            sums.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(root)}")
+    (root / "SHA256SUMS.txt").write_text("\n".join(sums) + "\n")
+    with pytest.raises(UnsupportedMontageError, match="ambiguous duplicate"):
+        read_edf_bipolar(source, allow_missing=True)
+    build_chbmit(root, output, splits, samples=128, sample_rate=128,
+                 workers=1, bandpass=None, expected_records=None)
+    record = json.loads((output / "records.json").read_text())["records"][0]
+    report = json.loads((output / "build_report.json").read_text())
+    assert record["status"] == "isolated" and not record["waveform_available"]
+    assert record["isolation_reasons"] == ["ambiguous_duplicate_bipolar_lead"]
+    assert len(record["events"]) == 1 and record["source_header_evidence"]["ambiguous_lead"] == "T8-P8"
+    assert report["source_fully_processed"] and report["records"]["failed"] == 0
+
+
 def test_pending_download_retry_and_no_final_statistics(tmp_path):
     root, output = tmp_path / "source", tmp_path / "shards"
     splits = fixture_source(root)

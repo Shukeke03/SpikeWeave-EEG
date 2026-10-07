@@ -148,8 +148,8 @@ class EDFRecording:
 class UnsupportedMontageError(ValueError):
     """An EDF header provides no evidenced route to any supported bipolar lead."""
 
-    def __init__(self, header_evidence: dict):
-        super().__init__("no supported bipolar lead is present")
+    def __init__(self, header_evidence: dict, message: str = "no supported bipolar lead is present"):
+        super().__init__(message)
         self.header_evidence = header_evidence
 
 
@@ -199,7 +199,9 @@ def read_edf_bipolar(path: str | Path, *, allow_missing: bool = False,
             sign = 1 if forward else -1
             if any(not np.allclose(values(choices[0]), values(i), rtol=1e-5, atol=1e-3)
                    for i in choices[1:]):
-                raise ValueError(f"ambiguous duplicate EDF lead: {lead}")
+                evidence = dict(header_evidence, isolation_reasons=["ambiguous_duplicate_bipolar_lead"],
+                                ambiguous_lead=lead, ambiguous_channels=[raw.ch_names[i] for i in choices])
+                raise UnsupportedMontageError(evidence, f"ambiguous duplicate EDF lead: {lead}")
             index = choices[0]
             result[out_index] = sign * values(index)
             valid[out_index] = True

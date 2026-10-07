@@ -208,8 +208,8 @@ def _process_record(task: dict) -> tuple[dict, np.ndarray, bool]:
         try:
             physical = read_edf_bipolar(source, allow_missing=True, common_reference=common_reference)
         except UnsupportedMontageError as error:
-            reasons = ["unsupported_montage"]
             evidence = error.header_evidence
+            reasons = list(evidence.get("isolation_reasons", ["unsupported_montage"]))
             if not evidence["has_explicit_channel_pairs"] and common_reference is None:
                 reasons.append("unknown_reference")
             record.update({"status": "isolated", "isolation_reasons": reasons,
