@@ -45,6 +45,7 @@ spikeweave doctor --config configs/tiny.yaml --device cpu
 | [dataset-chbmit-v1.md](docs/dataset-chbmit-v1.md) | 数据下载、处理及监控命令 |
 | [data-protocol.md](docs/data-protocol.md) | 数据来源、物理单位、划分和合法条件 |
 | [experiments.md](docs/experiments.md) | 固定实验与反证标准 |
+| [engineering-v0.2.md](docs/engineering-v0.2.md) | 本机与legion的新模型工程验证 |
 | [engineering-validation.md](docs/engineering-validation.md) | 历史原型的实测工程记录 |
 | [architecture-v0.1-legacy.md](docs/architecture-v0.1-legacy.md) | 已取代的历史三分支设计 |
 
