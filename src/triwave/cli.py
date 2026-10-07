@@ -85,11 +85,16 @@ def train_synthetic(args: argparse.Namespace) -> None:
 
 
 def train_manifest(args: argparse.Namespace) -> None:
-    from torch.utils.data import DataLoader
+    from torch.utils.data import DataLoader, WeightedRandomSampler
 
     from triwave.data.dataset import EEGManifestDataset, TrainNormalizer
+    from triwave.data.sharded import ShardedEEGDataset, fit_sharded_statistics
 
     device = select_device(args.device)
+    data_path = Path(args.manifest)
+    shard_root = data_path if data_path.is_dir() else data_path.parent
+    sharded = (shard_root / "window_index.npy").is_file() and (
+        data_path.is_dir() or data_path.name == "window_index.npy")
     if args.resume:
         trainer = Trainer.load(args.resume, device, resume_optimizer=True)
         normalizer = TrainNormalizer.from_dict(trainer.normalization) if trainer.normalization else None
@@ -97,16 +102,32 @@ def train_manifest(args: argparse.Namespace) -> None:
             raise ValueError("clinical manifest training requires a checkpoint with train normalization")
     else:
         config = _config(args)
-        raw_train = EEGManifestDataset(args.manifest, config=config, split="train", role="source")
-        normalizer = TrainNormalizer().fit(raw_train)
+        if sharded:
+            raw_train = ShardedEEGDataset(shard_root, config=config, split="train")
+            normalizer = fit_sharded_statistics(raw_train)
+        else:
+            raw_train = EEGManifestDataset(args.manifest, config=config, split="train", role="source")
+            normalizer = TrainNormalizer().fit(raw_train)
         trainer = Trainer(config, _training_config(args), device)
         trainer.normalization = normalizer.to_dict()
-    dataset = EEGManifestDataset(args.manifest, config=trainer.config, split="train", role="source",
-                                 normalizer=normalizer)
-    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=0,
-                        collate_fn=_collate)
+    dataset = (ShardedEEGDataset(shard_root, config=trainer.config, split="train", normalizer=normalizer)
+               if sharded else EEGManifestDataset(args.manifest, config=trainer.config, split="train",
+                                                   role="source", normalizer=normalizer))
     if not len(dataset):
         raise ValueError("manifest has no train/source windows")
+    sampler = None
+    if args.balanced:
+        labels = (torch.as_tensor(np.array(dataset.window_index["label"][dataset.indices], copy=True),
+                                  dtype=torch.long) if sharded else torch.tensor([
+                                      record.conditions.get("class", {}).get("id", -1)
+                                      for record in dataset.records], dtype=torch.long))
+        if (labels < 0).any():
+            raise ValueError("balanced sampling requires known nonnegative class IDs")
+        counts = torch.bincount(labels).clamp_min(1)
+        weights = 1 / counts[labels].double()
+        sampler = WeightedRandomSampler(weights, num_samples=len(dataset), replacement=True)
+    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=sampler is None,
+                        sampler=sampler, num_workers=0, collate_fn=_collate)
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
     iterator = iter(loader)
@@ -194,6 +215,23 @@ def attach_references(args: argparse.Namespace) -> None:
     _emit({"status": "ok", "manifest": str(path)})
 
 
+def build_chbmit(args: argparse.Namespace) -> None:
+    from triwave.data.build import build_chbmit as build
+
+    split_map = json.loads(Path(args.split_map).read_text()) if args.split_map else None
+    path = build(args.root, args.output, split_map, workers=args.workers,
+                 samples=args.window_samples, sample_rate=args.sample_rate, seed=args.seed)
+    _emit({"status": "ok", "index": str(path)})
+
+
+def audit_dataset(args: argparse.Namespace) -> None:
+    from triwave.data.validation import validate_sharded_dataset
+
+    result = validate_sharded_dataset(args.root, config=_config(args),
+                                      numerical_windows=args.numerical_windows, device=args.device)
+    _emit(result)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="TriWave-EEG research implementation")
     parser.add_argument("--seed", type=int, default=0)
@@ -218,6 +256,8 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--sampling-steps", type=int, default=4)
         if name == "train":
             command.add_argument("--manifest", required=True)
+            command.add_argument("--balanced", action="store_true",
+                                 help="inverse-class-frequency sampling on source train only")
         command.set_defaults(function=train_manifest if name == "train" else train_synthetic)
     prepare = commands.add_parser("prepare-chbmit")
     prepare.add_argument("--root", required=True)
@@ -230,6 +270,20 @@ def build_parser() -> argparse.ArgumentParser:
     references.add_argument("--manifest", required=True)
     references.add_argument("--output")
     references.set_defaults(function=attach_references)
+    build = commands.add_parser("build-chbmit")
+    build.add_argument("--root", required=True)
+    build.add_argument("--output", required=True)
+    build.add_argument("--split-map")
+    build.add_argument("--workers", type=int, default=2)
+    build.add_argument("--window-samples", type=int, default=1024)
+    build.add_argument("--sample-rate", type=float, default=256)
+    build.set_defaults(function=build_chbmit)
+    audit = commands.add_parser("audit-dataset")
+    audit.add_argument("--root", required=True)
+    audit.add_argument("--config", default="configs/legion.yaml")
+    audit.add_argument("--numerical-windows", type=int, default=16)
+    audit.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
+    audit.set_defaults(function=audit_dataset)
     sampling = commands.add_parser("sample")
     sampling.add_argument("--checkpoint", required=True)
     sampling.add_argument("--conditions", required=True)

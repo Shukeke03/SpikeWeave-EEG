@@ -6,6 +6,8 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
+import subprocess
 import threading
 import time
 import urllib.parse
@@ -22,7 +24,7 @@ MIRRORS = ("https://physionet-open.s3.amazonaws.com/",
 def safe_path(value: str) -> str:
     value = value.removeprefix("./")
     path = PurePosixPath(value)
-    if not value or path.is_absolute() or ".." in path.parts:
+    if not value or path.is_absolute() or ".." in path.parts or any(ord(c) < 32 for c in value):
         raise ValueError("unsafe inventory path")
     return str(path)
 
@@ -279,14 +281,75 @@ class ParallelDownload:
         return report
 
 
+def aria2_download(base: str | Path, binary: str = "aria2c", concurrent_files: int = 8,
+                  segments: int = 4, background: bool = False) -> dict:
+    """Official mirror + independent SHA256 per EDF; aria2 resumes its own bitmaps."""
+    if concurrent_files < 1 or not 1 <= segments <= 16:
+        raise ValueError("concurrent files must be positive; segments must be in [1,16]")
+    resolved = shutil.which(binary)
+    if resolved is None:
+        raise FileNotFoundError(f"aria2 binary unavailable: {binary}")
+    job = ParallelDownload(base, connections=24)
+    entries = inventory(job.metadata)
+    hashes = job.fetch_metadata(entries)
+    lines = []
+    for entry in entries:
+        if not entry["path"].endswith(".edf"):
+            continue
+        path = PurePosixPath(entry["path"])
+        if entry["path"] not in hashes:
+            raise ValueError(f"official checksum missing: {path}")
+        lines.extend([object_url(entry["path"]), f" dir={job.raw / str(path.parent)}",
+                      f" out={path.name}", f" checksum=sha-256={hashes[entry['path']]}"])
+    plan = job.metadata / "download-plan.txt"
+    plan.write_text("\n".join(lines) + "\n")
+    command = [resolved, f"--input-file={plan}", f"--max-concurrent-downloads={concurrent_files}",
+               f"--max-connection-per-server={segments}", f"--split={segments}",
+               "--min-split-size=8M", "--continue=true", "--check-integrity=true",
+               "--file-allocation=none", "--auto-file-renaming=false", "--enable-color=false",
+               "--summary-interval=10", "--download-result=hide", "--console-log-level=warn",
+               "--connect-timeout=15", "--timeout=30", "--lowest-speed-limit=256K",
+               "--retry-wait=2", "--max-tries=10",
+               f"--save-session={job.metadata / 'aria2-unfinished.txt'}", "--save-session-interval=30"]
+    if not background:
+        subprocess.run(command, check=True)
+        return {"status": "aria2_complete", "official_total_bytes": sum(e["size"] for e in entries)}
+    process_path = job.metadata / "download-process.json"
+    if process_path.exists():
+        prior = json.loads(process_path.read_text())
+        proc_command = Path(f"/proc/{prior['pid']}/cmdline")
+        if proc_command.exists() and b"aria2c" in proc_command.read_bytes().split(b"\0")[0]:
+            raise RuntimeError("an aria2 dataset download is already running")
+    log = job.metadata / "aria2-download.log"
+    with log.open("a") as output:
+        process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=output,
+                                   stderr=subprocess.STDOUT, start_new_session=True)
+    report = {"status": "downloading", "pid": process.pid, "started_unix": time.time(),
+              "command": command, "log": str(log), "total_bytes": sum(e["size"] for e in entries)}
+    _atomic_json(process_path, report)
+    return report
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", required=True)
     parser.add_argument("--connections", type=int, default=24)
     parser.add_argument("--chunk-mib", type=int, default=8)
     parser.add_argument("--limit", type=int)
+    parser.add_argument("--aria2", help="path to aria2c; uses its persistent byte-range engine")
+    parser.add_argument("--concurrent-files", type=int, default=8)
+    parser.add_argument("--segments", type=int, default=4)
+    parser.add_argument("--background", action="store_true")
     args = parser.parse_args()
-    ParallelDownload(args.base, args.connections, args.chunk_mib * 1024**2).run(args.limit)
+    if args.aria2:
+        if args.limit is not None:
+            parser.error("--limit applies only to the Python range engine")
+        print(json.dumps(aria2_download(args.base, args.aria2, args.concurrent_files, args.segments,
+                                        args.background)), flush=True)
+    else:
+        if args.background:
+            parser.error("--background requires --aria2")
+        ParallelDownload(args.base, args.connections, args.chunk_mib * 1024**2).run(args.limit)
 
 
 if __name__ == "__main__":

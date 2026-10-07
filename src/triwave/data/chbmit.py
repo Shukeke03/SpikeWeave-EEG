@@ -145,6 +145,14 @@ class EDFRecording:
     provenance: dict
 
 
+class UnsupportedMontageError(ValueError):
+    """An EDF header provides no evidenced route to any supported bipolar lead."""
+
+    def __init__(self, header_evidence: dict):
+        super().__init__("no supported bipolar lead is present")
+        self.header_evidence = header_evidence
+
+
 def read_edf_bipolar(path: str | Path, *, allow_missing: bool = False,
                      common_reference: str | None = None) -> EDFRecording:
     """Read physical uV; select explicit bipolar pairs or declared common-reference pairs.
@@ -155,10 +163,30 @@ def read_edf_bipolar(path: str | Path, *, allow_missing: bool = False,
     import mne
 
     raw = mne.io.read_raw_edf(path, preload=True, verbose="ERROR")
-    data = raw.get_data(units="uV")
     native_units = dict(getattr(raw, "_orig_units", {}))
     parsed = [canonical_lead(name) for name in raw.ch_names]
-    result = np.zeros((len(STANDARD_BIPOLAR_LEADS), data.shape[1]), dtype=np.float32)
+    header_evidence = {"source_channel_names": list(raw.ch_names), "native_units": native_units,
+                       "source_sample_rate": float(raw.info["sfreq"]),
+                       "source_samples": int(raw.n_times),
+                       "has_explicit_channel_pairs": any(pair is not None for pair in parsed),
+                       "declared_common_reference": common_reference}
+    wanted = {tuple(lead.split("-")) for lead in STANDARD_BIPOLAR_LEADS}
+    wanted |= {(b, a) for a, b in wanted.copy()}
+    if common_reference is not None:
+        ref = common_reference.upper()
+        wanted |= {(electrode, ref) for lead in STANDARD_BIPOLAR_LEADS
+                   for electrode in lead.split("-")}
+    picks = [index for index, pair in enumerate(parsed) if pair in wanted]
+    if not picks:
+        raise UnsupportedMontageError(header_evidence)
+    # Avoid a second full copy of dummy, ECG and unrelated EEG channels in 4h records.
+    data = raw.get_data(picks=picks, units="uV")
+    picked_index = {original: selected for selected, original in enumerate(picks)}
+
+    def values(index: int) -> np.ndarray:
+        return data[picked_index[index]]
+
+    result = np.zeros((len(STANDARD_BIPOLAR_LEADS), raw.n_times), dtype=np.float32)
     valid = np.zeros(len(STANDARD_BIPOLAR_LEADS), dtype=bool)
     origins: list[dict] = []
     for out_index, lead in enumerate(STANDARD_BIPOLAR_LEADS):
@@ -169,11 +197,11 @@ def read_edf_bipolar(path: str | Path, *, allow_missing: bool = False,
         choices = forward or reverse
         if choices:
             sign = 1 if forward else -1
-            if any(not np.allclose(data[choices[0]], data[i], rtol=1e-5, atol=1e-3)
+            if any(not np.allclose(values(choices[0]), values(i), rtol=1e-5, atol=1e-3)
                    for i in choices[1:]):
                 raise ValueError(f"ambiguous duplicate EDF lead: {lead}")
             index = choices[0]
-            result[out_index] = sign * data[index]
+            result[out_index] = sign * values(index)
             valid[out_index] = True
             origins.append({"lead": lead, "method": "existing_bipolar",
                             "source_channels": [raw.ch_names[index]], "sign": sign})
@@ -182,7 +210,7 @@ def read_edf_bipolar(path: str | Path, *, allow_missing: bool = False,
             pa = [i for i, pair in enumerate(parsed) if pair == (a, ref)]
             pb = [i for i, pair in enumerate(parsed) if pair == (b, ref)]
             if len(pa) == len(pb) == 1:
-                result[out_index] = data[pa[0]] - data[pb[0]]
+                result[out_index] = values(pa[0]) - values(pb[0])
                 valid[out_index] = True
                 origins.append({"lead": lead, "method": "declared_common_reference_difference",
                                 "source_channels": [raw.ch_names[pa[0]], raw.ch_names[pb[0]]],
@@ -193,7 +221,7 @@ def read_edf_bipolar(path: str | Path, *, allow_missing: bool = False,
         missing = [lead for lead, present in zip(STANDARD_BIPOLAR_LEADS, valid) if not present]
         raise ValueError(f"missing standard bipolar leads: {missing}")
     if not valid.any():
-        raise ValueError("no supported bipolar lead is present")
+        raise UnsupportedMontageError(header_evidence)
     for origin in origins:
         for name in origin["source_channels"]:
             native_unit = native_units.get(name, "").lower().replace("µ", "u").replace("μ", "u")

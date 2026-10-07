@@ -1,6 +1,6 @@
 # Project instructions
 
-- Current phase is implementation. The user authorized local coding, dedicated Miniforge environments, pushing verified code to the private GitHub repository, and pulling/running checks through `ssh legion`. Real clinical data downloads and paid training jobs are separate later steps.
+- Current phase includes real data construction. The user authorized public EEG downloads, mirror acceleration and preprocessing through `ssh legion`, alongside local coding and private GitHub synchronization. Paid training jobs are separate later steps.
 - Preserve waveform, wavelet-structure and clinical-text branches, three-way representation alignment, and explicit wavelet-conditioned diffusion in any architecture revision.
 - Keep Sketch2CT and MSADN as accurately attributed inspirations. JET, GenEEG, EEG-CLIP and ELM are relevant prior work; architectural combinations are not automatically novel.
 - Distinguish a proposed mechanism, a published result and a result measured in this repository. Read docs/engineering-validation.md for measured engineering checks; clinical performance remains unmeasured.
