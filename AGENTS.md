@@ -1,12 +1,14 @@
 # Project instructions
 
-- Current phase includes real data construction. The user authorized public EEG downloads, mirror acceleration and preprocessing through `ssh legion`, alongside local coding and private GitHub synchronization. Paid training jobs are separate later steps.
-- Preserve waveform, wavelet-structure and clinical-text branches, three-way representation alignment, and explicit wavelet-conditioned diffusion in any architecture revision.
-- Keep Sketch2CT and MSADN as accurately attributed inspirations. JET, GenEEG, EEG-CLIP and ELM are relevant prior work; architectural combinations are not automatically novel.
-- Distinguish a proposed mechanism, a published result and a result measured in this repository. Read docs/engineering-validation.md for measured engineering checks; clinical performance remains unmeasured.
-- Keep generation-time transport/noise time separate from physical EEG time.
-- Target EEG, full target CWT and clean target embeddings are teachers/targets only in externally conditioned generation. Optional reference EEG must be from an allowed non-target support sample.
-- Preserve physical units, montage and channel provenance. A bipolar lead is an electrode pair, not a single scalp electrode.
-- Perform patient/event/record splits before windowing and statistical fitting. Never use locked test EEG to fit normalization or construct adaptation support.
-- Do not commit source clinical data, reports, credentials or weights. Check third-party code and model licenses before copying them; paper access does not establish code reuse permission.
-- Verify privacy of the remote repository after creation or settings changes.
+- Project and model name: SpikeWeave-EEG. Canonical environment: spikeweave-eeg. Canonical directories use SpikeWeave-EEG; old paths are compatibility symlinks.
+- The user has fixed TWO top-level representation branches: E, a hybrid SNN EEG encoder; C, a shared medical text/image conditional encoder with ViLT-inspired joint token interaction. Do not reinstate three independent representation branches. Text-only, image-only and joint inputs share C parameters. Semantic/structure projection heads are readouts, not additional encoder branches.
+- Follow docs/architecture.md and the FIXED multi-positive bidirectional alignment protocol in docs/contrastive-protocol.md. Preserve explicit signed-wavelet conditional diffusion, montage measurement consistency and the six soft constraint families.
+- Current authorized scope is branding, repository/path/environment migration and design-document alignment. The user reserves algorithm-code changes for the next step. Keep src, scripts, tests and v0.1 algorithm configs unchanged during this migration. Existing Python namespace triwave, TriWaveModel and triwave-morlet-v1 remain compatibility identifiers until explicitly migrated.
+- Keep Sketch2CT and MSADN as accurately attributed inspirations. JET, WaveletDiff, GenEEG, EEG-CLIP, ELM, CLEF and SpikeWavformer are relevant prior work; architectural combinations are not automatically novel.
+- Distinguish fixed design, a published result and repository measurements. Historical v0.1 tests do not validate the new SNN / vision-language model; clinical performance remains unmeasured.
+- Keep EEG physical time, SNN state updates and diffusion noise time distinct.
+- Target EEG, full target CWT and clean target embeddings are representation teachers/targets only in externally conditioned generation. Optional reference EEG must be an allowed independent source/support sample. Null conditions do not participate in contrastive alignment.
+- Preserve physical units, montage, electrode endpoints, polarity and source provenance. Bipolar leads are electrode pairs. Q basis coordinates are linear measurement modes, not electrodes. Audit real montage residual before enforcing the hard subspace constraint.
+- Perform patient/event/record splits before windowing and statistical fitting. Never use locked test EEG to fit normalization or construct adaptation support. Scale fitting is source-only; avoid arbitrary centering that breaks montage closure.
+- Do not commit source clinical data, reports, credentials or weights. Check third-party licenses before copying code or weights. Verify GitHub remains private after repository changes.
+- Public-data processing on ssh legion is previously authorized. Do not initiate continual download monitoring unless the user requests it. Paid training jobs are separate later steps.

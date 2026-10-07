@@ -37,7 +37,7 @@
 
 ## legion 路径与加速
 
-服务器根目录：`/home/shuxing/workspace/datasets/TriWave-EEG/chbmit-1.0.0`。
+服务器根目录：`/home/shuxing/workspace/datasets/SpikeWeave-EEG/chbmit-1.0.0`。
 
 | 目录/文件 | 用途 |
 |---|---|
@@ -54,7 +54,7 @@
 | `processed/v1/build_report.json` | 构建状态与丢失原因 |
 | `processed/v1/dataset_audit.json` | 最终验收、事件覆盖、QC、体量 |
 
-下载使用官方 AWS HTTPS 镜像，8文件并发、每文件4段、断点续传、SHA-256、低速重试。实测原站约0.03 MiB/s，AWS单文件约2.73 MiB/s，并发总速约10 MiB/s；测量不是持续带宽保证。`triwave-download` 为独立 aria2 工具环境，`triwave-eeg` 为模型/处理环境。
+下载使用官方 AWS HTTPS 镜像，8文件并发、每文件4段、断点续传、SHA-256、低速重试。实测原站约0.03 MiB/s，AWS单文件约2.73 MiB/s，并发总速约10 MiB/s；测量不是持续带宽保证。`spikeweave-download` 为独立 aria2 工具环境，`spikeweave-eeg` 为模型/处理环境。
 
 低速阈值作用于分段连接，不能把总速度目标直接施加到每段。初轮256KiB/s阈值造成连接频繁重试并留下125个未完成文件；已调整为32KiB/s、60秒超时、持续重试，恢复未完成段并监测总吞吐。
 
@@ -62,12 +62,12 @@
 
 ```bash
 python3 src/triwave/data/download.py \
-  --base /home/shuxing/workspace/datasets/TriWave-EEG/chbmit-1.0.0 \
-  --aria2 /home/shuxing/miniforge3/envs/triwave-download/bin/aria2c \
+  --base /home/shuxing/workspace/datasets/SpikeWeave-EEG/chbmit-1.0.0 \
+  --aria2 /home/shuxing/miniforge3/envs/spikeweave-download/bin/aria2c \
   --concurrent-files 8 --segments 4 --background
 
-/home/shuxing/miniforge3/envs/triwave-eeg/bin/python -m triwave.data.pipeline \
-  --base /home/shuxing/workspace/datasets/TriWave-EEG/chbmit-1.0.0 \
+/home/shuxing/miniforge3/envs/spikeweave-eeg/bin/python -m triwave.data.pipeline \
+  --base /home/shuxing/workspace/datasets/SpikeWeave-EEG/chbmit-1.0.0 \
   --config configs/legion.yaml --workers 2 --interval 120 --device cpu
 ```
 
@@ -78,7 +78,7 @@ python3 src/triwave/data/download.py \
 ## 本机实时监控
 
 ```bash
-ssh -t legion 'watch -n 2 python3 /home/shuxing/workspace/TriWave-EEG/scripts/monitor_legion.py'
+ssh -t legion 'watch -n 2 python3 /home/shuxing/workspace/SpikeWeave-EEG/scripts/monitor_legion.py'
 ```
 
 每2秒显示完整文件体量/数量、最近下载速率、处理账本与验收状态、CPU/RAM/GPU与可用磁盘。下载完成量仅计完整文件，部分分段另有可恢复字节；最终校验以构建账本和验收为准。Ctrl+C 只退出监控，后台工作继续。正常训练读取已拟合统计并核对来源，避免重复扫描训练波形。

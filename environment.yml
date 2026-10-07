@@ -1,4 +1,4 @@
-name: triwave-eeg
+name: spikeweave-eeg
 channels:
   - conda-forge
 dependencies:

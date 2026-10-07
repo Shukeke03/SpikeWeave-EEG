@@ -41,7 +41,7 @@ Shi, Yanli et al. **Multi-scale adversarial diffusion network for image super-re
 |---|---|---|---|
 | [EEG-CLIP，2025](https://www.frontiersin.org/journals/robotics-and-ai/articles/10.3389/frobt.2025.1625731/full) | 临床EEG与报告对比学习，少样本/文本零样本解码 | 独立编码器、投影、医学文本初始化 | 它不是波形生成；本项目对齐是否改善生成而非只分类 |
 | [ELM，ICML2025](https://proceedings.mlr.press/v267/gijsen25a.html) | 临床报告监督、弱配对与MIL、标签效率 | 记录集合—报告对齐，处理局部错配 | 模板文本与真实报告分别处理；没有报告时不复制其证据范围 |
-| [GenEEG，CBM2026](https://www.sciencedirect.com/science/article/pii/S0010482525017524) | 患者适配latent diffusion，临床状态与12项生理属性条件 | 患者独立协议、折内统计、持续适配设计 | 小波/三分支相比已有生理条件的增益，及压缩后细节问题 |
+| [GenEEG，CBM2026](https://www.sciencedirect.com/science/article/pii/S0010482525017524) | 患者适配latent diffusion，临床状态与12项生理属性条件 | 患者独立协议、折内统计、持续适配设计 | 小波/双分支相比已有生理条件的增益，及压缩后细节问题 |
 | [JET，ICML2026](https://arxiv.org/abs/2605.21280) | 原波形Transformer、状态条件CFM、结构约束，TUAB/TUEV/TUSZ | 现代EEG骨干、条件调制、类别不平衡处理 | partial-wavelet条件与融合的额外控制/效用，不能再claim条件CFM+频谱loss本身 |
 
 JET 是首版必须纳入的强基线。[作者代码](https://github.com/Y-Research-SBU/JET)及[MIT许可](https://github.com/Y-Research-SBU/JET/blob/main/LICENSE)已核实，可在保留许可和来源的情况下评估作为后续实现起点。当前仓库尚未复制其代码。
@@ -85,6 +85,6 @@ JET 是首版必须纳入的强基线。[作者代码](https://github.com/Y-Rese
 
 已被覆盖：EEG文本对齐、类别/生理属性条件生成、Transformer/flow matching、频谱结构约束。
 
-候选差异不是“三分支更多”，而是：在同信息预算下，通过语义与可编辑的部分时频/导联结构交互，增加可检验的条件控制能力，同时保留对真实患者增强有用的变化。
+当前候选差异不是模块数量，而是：在同信息预算下，通过语义与可编辑的部分时频/导联结构交互，增加可检验的条件控制能力，同时保留对真实患者增强有用的变化。
 
 还需要证明：直接属性FiLM是否已经足够；小波域与多尺度条件的作用是否独立于容量/预训练；对比学习是否使条件表示更好而非压缩样本多样性。贡献随实验结果修订，不能预先写“首次”或“必然顶会”。

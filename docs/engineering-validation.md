@@ -1,5 +1,7 @@
 # 工程验证记录
 
+历史记录说明：以下验证针对 v0.1 三分支原型。此次品牌和路径迁移不构成双分支 SNN / 图文模型已实现或已通过临床验证的证据。名称迁移的检查另见 [name-migration.md](name-migration.md)。
+
 日期：2026-10-07。代码验证版本：`fab06ce`。本记录只报告工程行为；没有真实临床数据训练、诊断评价或少样本增强实验。
 
 ## 已配置环境
@@ -8,11 +10,11 @@
 |---|---|---|
 | 平台 | macOS ARM | Linux x86_64 / WSL2 |
 | Python | 3.11.17 | 3.11.17 |
-| 环境 | `/Users/shuxing/miniforge3/envs/triwave-eeg` | `/home/shuxing/miniforge3/envs/triwave-eeg` |
+| 环境 | `/Users/shuxing/miniforge3/envs/spikeweave-eeg` | `/home/shuxing/miniforge3/envs/spikeweave-eeg` |
 | PyTorch | 2.8.0 | 2.8.0+cu128 |
 | 测试设备 | CPU | CPU + CUDA 变换测试 |
 | GPU | 未用于本次检查 | RTX 3060 Laptop，6GB |
-| 工作目录 | `/Users/shuxing/AIlearning/TriWave-EEG` | `/home/shuxing/workspace/TriWave-EEG` |
+| 工作目录 | `/Users/shuxing/AIlearning/SpikeWeave-EEG` | `/home/shuxing/workspace/SpikeWeave-EEG` |
 
 两端 `pip check` 均通过，依赖快照分别存于根目录 `requirements-lock-macos.txt` 和 `requirements-lock-cuda.txt`。
 
@@ -21,7 +23,7 @@
 - 本机 `python -m pytest -q`：**52 passed, 1 skipped**；跳过 CUDA 变换测试，因为本机没有 CUDA。
 - legion `python -m pytest -q`：**53 passed**，包括 CUDA 变换往返和梯度。
 - 本机 `python -m ruff check .`：通过。
-- [GitHub Actions CPU verification](https://github.com/Shukeke03/TriWave-EEG/actions/runs/37569055684)：通过。
+- [GitHub Actions CPU verification](https://github.com/Shukeke03/SpikeWeave-EEG/actions/runs/37569055684)：通过。
 - 完整 signed DWT 与 PyWavelets 系数一致；往返、梯度、不同长度和有效样本支持传播已检查。
 - CWT 检查频率峰值、幅度平方变化、功率池化、边界/缺失 mask、全缺失数值安全和梯度。
 - 三分支检查 shifted-window mask、缺失/NaN 条件隔离、完整模态 dropout、文本 FiLM 丢弃路径、独立对齐和完整频带输出梯度。

@@ -1,40 +1,42 @@
 # 开发与运行
 
+状态：项目与环境已更名为 SpikeWeave-EEG。以下运行命令仍对应 v0.1 三分支原型；已确立的 SNN / 图文双分支与新损失尚未实现。新的 `spikeweave` CLI 与原 `triwave` CLI 暂时指向同一兼容实现，内部 Python namespace 和 `triwave-morlet-v1` 数据协议保持不变。当前架构见 [architecture.md](architecture.md)，固定对比协议见 [contrastive-protocol.md](contrastive-protocol.md)。
+
 目前提供可运行的研究实现：EDF/CHB-MIT 处理、三分支对齐、条件融合、完整 signed DWT 上的 WaveDiT、DDPM v-prediction、DDIM 采样，以及需独立训练的 CFM 比较。尚未完成真实临床数据训练和泛化评估。合成信号只验证软件行为。
 
 ## 本机 Miniforge
 
-本机为 macOS ARM，环境位于 `/Users/shuxing/miniforge3/envs/triwave-eeg`。CPU 支持完整验证；当前 Morlet CWT 的复数 FFT 实现不支持 MPS。
+本机为 macOS ARM，环境位于 `/Users/shuxing/miniforge3/envs/spikeweave-eeg`。CPU 支持完整验证；当前 Morlet CWT 的复数 FFT 实现不支持 MPS。
 
 ```bash
 source /Users/shuxing/miniforge3/etc/profile.d/conda.sh
-conda activate triwave-eeg
-cd /Users/shuxing/AIlearning/TriWave-EEG
+conda activate spikeweave-eeg
+cd /Users/shuxing/AIlearning/SpikeWeave-EEG
 python -m pip install -r requirements-macos.txt
 python -m pip install -e . --no-deps
 python -m ruff check .
 python -m pytest -q
-triwave doctor --config configs/legion.yaml --device cpu
-triwave smoke --config configs/tiny.yaml --device cpu --output runs/local-smoke
+spikeweave doctor --config configs/legion.yaml --device cpu
+spikeweave smoke --config configs/tiny.yaml --device cpu --output runs/local-smoke
 ```
 
 新机器可先用 `conda env create -f environment.yml` 建立 Python 3.11 环境，再按平台安装上面的依赖。已有环境无需重新创建。
 
 ## legion 服务器
 
-当前 `ssh legion` 指向 NVIDIA RTX 3060 Laptop 6GB 的 WSL2/Linux 主机。环境使用 `/home/shuxing/miniforge3/envs/triwave-eeg`，项目使用 `/home/shuxing/workspace/TriWave-EEG`。
+当前 `ssh legion` 指向 NVIDIA RTX 3060 Laptop 6GB 的 WSL2/Linux 主机。环境使用 `/home/shuxing/miniforge3/envs/spikeweave-eeg`，项目使用 `/home/shuxing/workspace/SpikeWeave-EEG`。
 
 ```bash
 ssh legion
 source /home/shuxing/miniforge3/etc/profile.d/conda.sh
-conda activate triwave-eeg
-cd /home/shuxing/workspace/TriWave-EEG
+conda activate spikeweave-eeg
+cd /home/shuxing/workspace/SpikeWeave-EEG
 git pull --ff-only
 python -m pip install -r requirements-cuda.txt
 python -m pip install -e . --no-deps
-triwave doctor --config configs/legion.yaml --device cuda
+spikeweave doctor --config configs/legion.yaml --device cuda
 python -m pytest -q
-triwave smoke --config configs/legion.yaml --device cuda --amp --batch-size 2 --output runs/legion-smoke
+spikeweave smoke --config configs/legion.yaml --device cuda --amp --batch-size 2 --output runs/legion-smoke
 ```
 
 CUDA 环境固定 PyTorch 2.8.0/cu128。WSL 下 `nvidia-smi` 的实际位置为 `/usr/lib/wsl/lib/nvidia-smi`。Miniforge 自身不提供显卡驱动；当前主机已有可用驱动。
@@ -52,11 +54,11 @@ CUDA 环境固定 PyTorch 2.8.0/cu128。WSL 下 `nvidia-smi` 的实际位置为 
 
 ```bash
 # 单独预训练三分支，生成主干此时尚未训练
-triwave train --manifest /absolute/path/manifest.jsonl --config configs/legion-clinical.yaml --alignment-only --steps 1000 --output runs/alignment
+spikeweave train --manifest /absolute/path/manifest.jsonl --config configs/legion-clinical.yaml --alignment-only --steps 1000 --output runs/alignment
 # 载入对齐阶段，然后联合训练条件扩散
-triwave train --manifest /absolute/path/manifest.jsonl --resume runs/alignment/last.pt --steps 1000 --output runs/diffusion
+spikeweave train --manifest /absolute/path/manifest.jsonl --resume runs/alignment/last.pt --steps 1000 --output runs/diffusion
 # CFM 使用新模型/新检查点，不能将 diffusion 检查点直接用于 flow
-triwave train-synthetic --config configs/legion.yaml --objective flow --device cuda --steps 10 --output runs/flow-check
+spikeweave train-synthetic --config configs/legion.yaml --objective flow --device cuda --steps 10 --output runs/flow-check
 ```
 
 当前 CLI 的 steps 是优化步数，记录于 `metrics.jsonl`；`last.pt` 包含模型、优化器、配置、训练步和训练集归一化。每次命令结束原子保存，`--resume` 恢复优化器与 CPU Torch RNG，数据加载顺序和 CUDA RNG 尚未保存，恢复不保证与不中断训练逐位相同。采样参数 `--steps` 表示 DDIM/流积分步数；生成时间与物理 EEG 时间分开。
@@ -66,7 +68,7 @@ triwave train-synthetic --config configs/legion.yaml --objective flow --device c
 当前已实现 CHB-MIT；先自行按照其访问条件准备原始 EDF 和官方 summary 文件。其他数据源需要对应 adapter，不能将病例诊断、事件标签和正常人混为同一任务。
 
 ```bash
-triwave prepare-chbmit --root /absolute/path/chbmit --output /absolute/path/processed-chbmit --split-map /absolute/path/patient-splits.json
+spikeweave prepare-chbmit --root /absolute/path/chbmit --output /absolute/path/processed-chbmit --split-map /absolute/path/patient-splits.json
 ```
 
 split-map 是 `{ "chb01": "train", "chb02": "validation", "chb03": "test" }` 形式，实际必须覆盖所有准备导入的病例；这里仅展示格式，不是论文划分。`chb21` 与 `chb01` 按同一患者锁定。流程先锁定患者、检查源文件哈希，再对整条记录滤波/重采样并切窗。保留 µV、16 条双极导联的两个电极坐标、标签来源和完整处理上下文；允许缺失导联的 Python API 会显式保存 mask。
@@ -77,7 +79,7 @@ split-map 是 `{ "chb01": "train", "chb02": "validation", "chb03": "test" }` 形
 
 ```bash
 # 可选：在同一目录另存带审计 source references 的 manifest；不存在合法候选时保持缺失
-triwave attach-references --manifest /absolute/path/processed-chbmit/manifest.jsonl
+spikeweave attach-references --manifest /absolute/path/processed-chbmit/manifest.jsonl
 ```
 
 该命令优先匹配已指定事件类别，从训练 source 选择参考，使用 sample ID 与 seed 确定轮转顺序。它不从 query 构造支持集，属于 source-only 条件生成；显式的少样本 support 协议需要单独准备。持有参考类别标签是条件预算的一部分，必须与同条件基线公平比较。
@@ -87,7 +89,7 @@ triwave attach-references --manifest /absolute/path/processed-chbmit/manifest.js
 ## 条件生成
 
 ```bash
-triwave sample --checkpoint runs/diffusion/last.pt --conditions /absolute/path/conditions.npz --prompt 'This window overlaps an annotated seizure.' --device cuda --steps 30 --guidance 1.5 --output outputs/generated.npz
+spikeweave sample --checkpoint runs/diffusion/last.pt --conditions /absolute/path/conditions.npz --prompt 'This window overlaps an annotated seizure.' --device cuda --steps 30 --guidance 1.5 --output outputs/generated.npz
 ```
 
 条件 NPZ 必须有 `lead_geometry`，形状 `[B,C,6]`，单位米，端点与训练导联一致。可选 `reference_waveform` `[B,C,L]`、布尔 `reference_valid` `[B,C]` 或 `[B,C,L]`、`structure`/`structure_valid` `[B,C,F,T]`、`attribute_values`/`attribute_valid` `[B,8]`。参考 EEG 在有临床归一化检查点时使用原始 µV，CLI 会应用训练尺度并计算 CWT；直接提供 structure 时必须已经是同一归一化尺度和本文 Morlet 实现的 log-power，并声明 `cwt_protocol="triwave-morlet-v1"` 及 `structure_scale="normalized_uV"`（合成检查点使用 `"synthetic_arbitrary_units"`）。未知属性使用 False mask；当前八维属性接口还没有通用临床语义词典，应由后续协议定义名称、单位和合法范围。
