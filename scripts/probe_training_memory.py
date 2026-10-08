@@ -47,9 +47,13 @@ def main():
     torch.cuda.reset_peak_memory_stats()
     started = time.monotonic()
     results = []
-    for update in range(2):
+    for update in range(4):
+        if update == 2:
+            # Existing Adam states + retained gradients during the next forward
+            # reproduce the accumulation peak; single-step probes miss this.
+            trainer.training = replace(training, gradient_accumulation=2)
         # Spaced source windows, avoiding a probe dominated by one recording.
-        positions = [(update * args.batch_size + j) * len(dataset) // (2 * args.batch_size)
+        positions = [(update * args.batch_size + j) * len(dataset) // (4 * args.batch_size)
                      for j in range(args.batch_size)]
         results.append(trainer.train_step(_collate([dataset[i] for i in positions])))
     torch.cuda.synchronize()
@@ -59,6 +63,7 @@ def main():
     ).stdout.strip()
     print(json.dumps({"batch_size": args.batch_size, "updates": trainer.step,
                       "actual_stage": trainer.active_stage, "source_windows": len(dataset),
+                      "accumulation_with_existing_adam_states_tested": True,
                       "peak_allocated_mib": torch.cuda.max_memory_allocated() / 1024**2,
                       "peak_reserved_mib": torch.cuda.max_memory_reserved() / 1024**2,
                       "gpu_used_total_mib": gpu, "seconds": time.monotonic() - started,
