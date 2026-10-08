@@ -2,6 +2,8 @@
 
 2026-10-07：完整文件下载已到686/686；后台预处理与验收继续。最终可用窗口数、事件保留数与派生数据体量等待服务器验收。本文区分文件到齐与构建完成。
 
+本文保留当时下载与处理测量，不表示2026-10-08进行了新的服务器核查或处理。当前双分支数据、属性、掩码和条件来源设计见 [data-protocol.md](data-protocol.md)，实施顺序和baseline门槛见 [project-plan.md](project-plan.md)。
+
 ## 官方库存与体量
 
 来源：[CHB-MIT 1.0.0](https://physionet.org/content/chbmit/1.0.0/)，镜像 `s3://physionet-open/chbmit/1.0.0/`。完整 S3 对象清单、`RECORDS`、`RECORDS-WITH-SEIZURES`、`SHA256SUMS.txt` 与各病例 summary 联合核对：
@@ -32,8 +34,8 @@
 - 标准导联不完整进入隔离目录与索引。chb12_27 仅依据显式 CS2 共同参考通道差分；chb12_28/29 的裸电极通道参考未声明，保留原始文件、头证据及标注，禁止猜测转换。
 - 实际转换另发现42个记录中同名 T8-P8 通道的波形不一致。保留原始 EDF、头证据与事件，记录 `ambiguous_duplicate_bipolar_lead` 并隔离；不任意选择或平均冲突通道。最终可训练记录和事件覆盖仍须以完成后的验收为准。
 - 一个 EDF 对应一个连续 `.npy` 分片；窗口索引不复制波形。DWT、带有效性掩码的数值 CWT 在训练读取时计算，避免大量图片缓存与量化损失。
-- 全局 µV 仿射统计只拟合合格 train/source 窗口，保留通道之间相对幅值；摘要绑定训练索引、协议、split lock 与源 SHA。
-- 每个参考只来自不同独立患者的训练组，优先匹配指定事件类别。完整目标 CWT 仅作训练监督。真实标签作为文本/参考类别的条件适用于明确的类别条件评估，不能据此声称未知类别的盲生成。
+- 模型尺度固定 `source_rms_v2`：只拟合合格train/source窗口的单一全局µV RMS，`mean=0`、不减均值，保留通道之间相对幅值；摘要绑定训练索引、协议、split lock与源SHA。物理shards可复用，旧affine统计不能直接混用；现有文件须看scale_protocol与审计，不能仅凭路径假定已迁移。
+- 每个历史参考只来自不同独立患者的训练组，实际优先按目标真值事件标签选donor。完整目标CWT仅作训练监督。该索引适用于明确类别已知的训练/条件实验，不能直接作为未知query入口；v2须另建由显式请求检索、与隐藏query标签无关的独立request bank，尚未生成。
 
 ## legion 路径与加速
 
@@ -50,7 +52,8 @@
 | `processed/v1/records/` | 连续物理分片、局部索引、完成账本 |
 | `processed/v1/window_index.npy` | 可用窗口索引和独立参考索引 |
 | `processed/v1/isolated_index.npy` | 隔离窗口，不能进入正常训练 |
-| `processed/v1/train_normalizer.json` | 仅训练集拟合的统计与溯源 |
+| `processed/v1/train_normalizer.json` | 历史训练统计路径；须核查scale_protocol和来源摘要 |
+| `processed/dualbranch-v2/train_scale_v2.json` | v2约定的明确RMS尺度文件；本次文档更新不表示已生成 |
 | `processed/v1/build_report.json` | 构建状态与丢失原因 |
 | `processed/v1/dataset_audit.json` | 最终验收、事件覆盖、QC、体量 |
 

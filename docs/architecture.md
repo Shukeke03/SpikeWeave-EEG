@@ -2,6 +2,8 @@
 
 日期：2026-10-07。状态：固定研究设计已实现为v0.2并进行工程验证，临床效果尚未测量。此文取代历史三分支设计；实际入口与边界见implementation-v0.2.md。
 
+2026-10-08：最新数据迁移和按效果分阶段评估汇总于 [project-plan.md](project-plan.md)。低预算开发不改变本文固定双分支和六约束。
+
 ## 1. 名称与信息流
 
 SpikeWeave-EEG: Dual-Branch Spiking EEG and Vision–Language Alignment for Montage-Constrained Wavelet Diffusion。
@@ -18,7 +20,7 @@ SpikeWeave-EEG: Dual-Branch Spiking EEG and Vision–Language Alignment for Mont
 
 数值 CWT 每导联 64×128，频率范围及有效边界服从源带宽和 COI；保留线性功率/对数功率定义、Hz/time坐标与观察mask。禁止频率/时间翻转、随意旋转等改变含义的图像增强。完整 DWT 使用 db4、J=3、periodization，保留 A3/D3/D2/D1 的全部 signed 系数。
 
-归一化只拟合 train/source，采用单一标量尺度；不能任意减去使 montage 子空间闭环破坏的逐导联均值。现有 v0.1 affine normalizer 的适配属于下一阶段，未声称已经满足新协议。
+归一化只拟合 train/source，采用已实现的 `source_rms_v2` 单一 RMS 标量，模型输入为物理 µV/s，不减均值。新统计写入 `train_scale_v2.json`；v0.1 affine 文件仅供历史逆变换，不能直接混入新生成器。真实完整数据的尺度拟合与验收仍以实际构建报告为准。
 
 ## 3. E：STAtten-8-512 EEG 适配版
 

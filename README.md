@@ -35,8 +35,11 @@ spikeweave doctor --config configs/tiny.yaml --device cpu
 
 ## 设计与记录
 
+从 [项目总方案](docs/project-plan.md) 开始阅读：汇总最新架构、双分支数据处理和 G0–G3 分阶段评估。未达强基线时只运行必要审计与小规模开发筛选，候选 SOTA 阶段才展开完整验证。
+
 | 文件 | 用途 |
 |---|---|
+| [project-plan.md](docs/project-plan.md) | 最新总方案、实现状态与按效果解锁的评估顺序 |
 | [architecture.md](docs/architecture.md) | 已确立的双分支与 MCWave 架构 |
 | [contrastive-protocol.md](docs/contrastive-protocol.md) | 固定对比学习数学定义与关系规则 |
 | [name-migration.md](docs/name-migration.md) | 本机、服务器、GitHub与环境的更名映射 |
