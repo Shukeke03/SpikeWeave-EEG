@@ -71,3 +71,9 @@ M 降低的是 C 阶段的生成器容量，当前 3060 Laptop 的 6144 MiB 总�
 数据沿用完成的 dualbranch-v2：837,181 个窗口，训练519,047、验证66,418、测试251,716；无需为 D 的容量变化复制 raw/shards、CWT 缓存或改动 source RMS。数据、权重和训练产物仍在 Git 外。
 
 相关细则：[架构](architecture.md)、[项目总方案](project-plan.md)、[legion 当前预训练与人工监控](legion-training.md)。
+
+## 本次工程验证
+
+2026-10-08：本机与legion的完整CPU测试均为248 passed、2 CUDA skips，ruff与diff检查通过。legion验证时显式隐藏CUDA，避免占用正在预训练的GPU；两版`doctor --config-only`均确认正式E/C和对应D容量，仓库仍为private。
+
+验证覆盖精确MCWave参数计数、正式M/L配置差异、A/B不分配D、不同条件/生成宽度的缩微前反传和采样、旧A配置→共享B→独立生成器的转移/恢复、语义与尺度冲突拒绝，以及源`last.pt`被原子更新时的哈希一致性。它证明当前实现和转移边界可运行；正式M/L的完整尺寸C训练、吞吐、显存及效果仍需在后续资源上测量。
