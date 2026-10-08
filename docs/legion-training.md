@@ -33,3 +33,9 @@ Ctrl+C只关闭监控，训练独立于 SSH 会话继续。不会部署自动持
 本机完整测试215 passed、2 CUDA skips；legion完整测试217 passed、无skip。真实v2数值审计16个source窗口通过，DWT最大误差4.7684e-6，属性/CWT masks核对通过，query数值读取0。仅运行必要数据与训练工程验收，未开始G1–G3效果评估。
 
 实际启动发现 `set_per_process_memory_fraction` 必须使用含 index 的 CUDA device；CLI已解析当前 GPU 编号并增加回归断言，本机/legion各10项CLI测试通过。初次失败没有优化更新，其日志保留于 `runs/legion-setup-20261008/failed-launch-cuda-index.log`。
+
+## 实际启动与预计时长
+
+正式初始更新已完成：32个microstep、1个optimizer update，训练循环106.74秒，含保存共107.68秒，`last.pt`已写入。随后于2026-10-08约15:35 CST从该断点启动独立后台进程，PID117152，运行源码版本`96d6949`；目标总更新100000、额外99999。一次性启动确认中，进程已推进到microstep39，损失有限，GPU2980/6144 MiB（48.5%），峰值allocated2563.49 MiB、reserved2814 MiB。之后停止代理持续监控，用户可用上述watch命令自行查看。
+
+按约107秒/optimizer update估算：1000步约30小时，10000步约12.4天，100000步约124天。当前约3.3秒/microstep；梯度累积32次才是一次更新，不能把一个microstep的时间当作一步预算。该估算只依据一次完整更新及启动时的微步吞吐，机器负载/暂停/写盘会改变实际时长；不是训练收敛或效果达标的预计时间。这里只计Stage A，后续B对齐与C扩散需另计；迁移到更快服务器后可加载已有表征断点，但若改batch/训练协议，应另记运行配置。
