@@ -8,7 +8,9 @@
 
 开启 SNN/医学 ViT block 激活重计算，保留 RNG 与 PLIF 梯度；冻结医学 ViT 仍向数值 stem 反传。BF16 矩阵运算、FP32 神经元状态、AdamW、有效 batch256、lr1e-4、warmup5000、最多100000次优化更新保持阶段 A 配置。实际 microbatch 由真实数据显存探测决定，梯度累积到256。Stage A 没有对比损失；之后 Stage B 的对比候选数量不能用累积伪造。本次不会自动进入 B/C，也不把表征 checkpoint 当作能生成 EEG 的模型。
 
-探测用 `scripts/probe_training_memory.py`，每个候选独立进程，以 accumulation=1 完成两次真实 optimizer 更新，包含 Adam 状态分配。CUDA allocator fraction 初值0.43，为驱动/context留空间；总占用另由 `nvidia-smi` 核实。这是显存上限，不能保证其他 GPU 应用不会另占显存。
+探测用 `scripts/probe_training_memory.py`，每个候选独立进程，以 accumulation=1 完成两次真实 optimizer 更新，包含 Adam 状态分配，再测试两次累积 microstep，检查已有 Adam 状态及保留梯度时的峰值。CUDA allocator fraction 最终设0.47，为驱动/context留空间；总占用另由 `nvidia-smi` 核实。这是 allocator 上限，不能保证其他 GPU 应用不会另占显存。
+
+实测最终配置：**microbatch8 × accumulation32 = effective batch256**。batch8在0.43的保守限制下触及上限；根据约166 MiB驱动/context开销调整为0.47后通过累积稳态测试。峰值 allocated2563.37 MiB、reserved2834 MiB，`nvidia-smi`总占用3000/6144 MiB（48.8%）。4个真实microstep/3次optimizer更新约14.42秒，不能直接当作长跑吞吐。完整E/C参数272964625，官方医学权重严格加载；未降低主干宽度或层数。
 
 ## 数据与权重
 
@@ -18,7 +20,7 @@
 
 ## 断点与人工监控
 
-后台运行目录为 `runs/legion-pretrain-20261008`。`train.log`/`metrics.jsonl`提供实时微步损失和显存；`run.json`记录源码版本、数据身份、配置和额外优化更新预算。`last.pt`在每100次更新或600秒后的首个完整累积边界原子保存；不在未完成累积时保存，恢复后数据迭代器会重启，不能声称逐样本轨迹完全复现。
+后台运行目录为 `runs/legion-pretrain-20261008`。先完成1次正式累积更新并保存初始断点，再从该断点后台续训99999次更新，总预算100000次。`train.log`/`metrics.jsonl`提供实时微步损失和显存；`run.json`记录源码版本、数据身份、配置和额外优化更新预算。`last.pt`在每100次更新或600秒后的首个完整累积边界原子保存；不在未完成累积时保存，恢复后数据迭代器会重启，不能声称逐样本轨迹完全复现。
 
 人工查看命令：
 
@@ -26,4 +28,6 @@
 ssh -t legion 'cd /home/shuxing/workspace/SpikeWeave-EEG && watch -n 2 "python3 scripts/monitor_training.py --run runs/legion-pretrain-20261008"'
 ```
 
-Ctrl+C只关闭监控，训练独立于 SSH 会话继续。不会部署自动持续监控任务。实际启动显存和 batch 记录见本文件后续实测条目；完成表征预训练不等于完成扩散训练或证明临床性能。
+Ctrl+C只关闭监控，训练独立于 SSH 会话继续。不会部署自动持续监控任务。完成表征预训练不等于完成扩散训练或证明临床性能。
+
+本机完整测试215 passed、2 CUDA skips；legion完整测试217 passed、无skip。真实v2数值审计16个source窗口通过，DWT最大误差4.7684e-6，属性/CWT masks核对通过，query数值读取0。仅运行必要数据与训练工程验收，未开始G1–G3效果评估。

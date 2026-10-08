@@ -1,4 +1,4 @@
-# Formal Stage A; measured microbatch is set by the launch command.
+# Formal Stage A; measured microbatch=8, accumulation=32, effective batch=256.
 # Keep the full E/C architecture; checkpoint activations to fit the 6GB laptop GPU.
 model:
   channels: 16
@@ -85,7 +85,7 @@ training:
   stage: pretrain
   learning_rate: 0.0001
   mixed_precision: true
-  gradient_accumulation: 1
+  gradient_accumulation: 32
   effective_batch_size: 256
   warmup_steps: 5000
   total_steps: 100000
