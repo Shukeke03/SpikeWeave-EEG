@@ -39,6 +39,9 @@ def main():
     print(f"Process: {'RUNNING' if active else 'STOPPED'} | PID {pid}")
     config = read_json(args.run / "run.json")
     print(f"Stage: {config.get('stage', launch.get('stage', '--'))}")
+    if config:
+        print(f"Batch: {config.get('batch_size')} x {config.get('gradient_accumulation')} = {config.get('effective_batch_size')}")
+        print(f"Target optimizer updates: {config.get('target_step')}")
     latest = {}
     try:
         with (args.run / "metrics.jsonl").open("rb") as stream:

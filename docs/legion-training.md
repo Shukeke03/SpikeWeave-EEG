@@ -31,3 +31,5 @@ ssh -t legion 'cd /home/shuxing/workspace/SpikeWeave-EEG && watch -n 2 "python3 
 Ctrl+C只关闭监控，训练独立于 SSH 会话继续。不会部署自动持续监控任务。完成表征预训练不等于完成扩散训练或证明临床性能。
 
 本机完整测试215 passed、2 CUDA skips；legion完整测试217 passed、无skip。真实v2数值审计16个source窗口通过，DWT最大误差4.7684e-6，属性/CWT masks核对通过，query数值读取0。仅运行必要数据与训练工程验收，未开始G1–G3效果评估。
+
+实际启动发现 `set_per_process_memory_fraction` 必须使用含 index 的 CUDA device；CLI已解析当前 GPU 编号并增加回归断言，本机/legion各10项CLI测试通过。初次失败没有优化更新，其日志保留于 `runs/legion-setup-20261008/failed-launch-cuda-index.log`。
