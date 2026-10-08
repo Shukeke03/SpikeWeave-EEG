@@ -39,3 +39,11 @@ Ctrl+C仅关闭watch，后台训练继续。启动完成后代理不持续监控
 严格续训新作业时使用其`last.pt`及batch20、fraction0.77，不额外传配置；保留`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`。M的C扩散阶段须在B对齐完成后另行实测显存与启动，L保持延后。
 
 本机工程验证：260 passed、2 CUDA skips；新增测试覆盖Adam/RNG/进度保留、显式counter重基、非法配方拒绝、源文件不修改、严格resume不放宽，以及信号停止时的完整累积与原子保存。正式临床生成和效果尚未验证。
+
+## 实际启动确认
+
+legion的CPU工程验证同为260 passed、2 CUDA skips，验证时显式隐藏CUDA。服务器访问GitHub SSH/443超时，改由SSH传输已推送的Git bundle，校验base与commit后快进到`e6941ec`，保持与本机/私有GitHub的源码一致。
+
+真实新配方的首个完整更新已完成：step133→134，microstep1729→1742，13个microbatch，循环89.56秒，损失16.4231且梯度有限。`last.pt`原子保存成功；峰值allocated4295.65 MiB、reserved4722 MiB，加启动测得约166 MiB的CUDA context约占总显存79.6%。run.json的generator version为M、depth12/dim512/heads8，`active=false`确认当前A没有加载生成器。
+
+随后独立后台严格恢复新`last.pt`，执行额外99866次optimizer更新，目标总计100000。`bootstrap-summary.json`保留第一次更新的运行记录，`launcher.json`记录实际后台PID和命令，显存探测日志保存在`runs/legion-m-80pct-setup/`。启动确认后停止代理持续监控。
