@@ -20,7 +20,7 @@ SpikeWeave-EEG 是医学 EEG 条件生成与患者独立少样本增强的私有
 
 两版本使用同一代码、E/C 架构、数据划分和训练协议，扩散权重与运行目录分别保存。M 是当前验证起点，尚未证明容量最优；L 是后续容量比较，不要求同时启动两个训练作业。
 
-当前legion运行M路线的A阶段，使用batch20×累积13、约79%总显存；已停止旧一半显存作业并从完整断点复用Adam/RNG与学习率进度。[最新运行与监控](docs/legion-m-training-80.md)记录实测和恢复方式。
+当前legion采用M路线的A阶段昼夜配方：北京时间09:00–23:00约79%显存，23:00–09:00约48%，安全保存后自动切换。日间batch20×累积13，夜间batch8×累积32，保留Adam/RNG和全局优化进度。[每日规则与监控](docs/daily-training.md)给出当前入口；[80%配方实测](docs/legion-m-training-80.md)保留探测记录。
 
 | 版本 | 主配置 | MCWave 参数 | 完整模型参数 |
 |---|---|---:|---:|
@@ -54,6 +54,8 @@ spikeweave doctor --config configs/tiny.yaml --device cpu
 | [project-plan.md](docs/project-plan.md) | 最新总方案、实现状态与按效果解锁的评估顺序 |
 | [architecture.md](docs/architecture.md) | 已确立的双分支与 MCWave 架构 |
 | [capacity-versions.md](docs/capacity-versions.md) | M/L 容量、共享表征与独立生成器训练 |
+| [daily-training.md](docs/daily-training.md) | legion 昼夜显存规则、安全切换与监控 |
+| [training-time-and-cvpr.md](docs/training-time-and-cvpr.md) | 当前训练时间估算与 CVPR 研究定位 |
 | [contrastive-protocol.md](docs/contrastive-protocol.md) | 固定对比学习数学定义与关系规则 |
 | [name-migration.md](docs/name-migration.md) | 本机、服务器、GitHub与环境的更名映射 |
 | [implementation-v0.2.md](docs/implementation-v0.2.md) | 当前实现、运行方法和验证边界 |

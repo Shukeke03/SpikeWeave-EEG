@@ -2,7 +2,7 @@
 
 更新：2026-10-08。状态：v0.3 双分支数据库已在 legion 构建，官方医学权重已准备，共享 Stage A 正在真实 CHB-MIT 上预训练。确立 M（12×512）为优先扩散版本、L（24×1024）为后续扩容版本；B/C 尚未启动，生成和真实增强效果仍待测量。
 
-最新运行调整：旧一半显存作业已停止并保留step133，M路线改用microbatch20×累积13、effective260，实测约79%显存。已有Adam/RNG/优化进度通过显式配方fork保留，首个新完整更新step134已保存。以下原batch8×32记录为历史起点，实际启动与监控见[legion-m-training-80.md](legion-m-training-80.md)。
+最新运行调整：旧一半显存作业已停止并保留step133，随后80%配方安全训练至step138。现在使用Asia/Shanghai昼夜调度：09:00–23:00为microbatch20×累积13、effective260、约79%显存；23:00–09:00为microbatch8×累积32、effective256、实测47.8%显存。保留Adam/RNG和全局优化进度，切换重新开始数据迭代；规则与监控见[daily-training.md](daily-training.md)，历史探测见[legion-m-training-80.md](legion-m-training-80.md)。
 
 本文汇总目前确立的架构、数据、训练、评估和推进顺序。最新调整以本文及链接的专题协议为准；历史三分支原型不再作为主方案。
 
@@ -278,7 +278,7 @@ G1/G2默认主闸门为strict source-only、自然分布开发query的患者等�
 | 已实现并工程验证 | E/C、固定对比、signed DWT clean VP、六类约束、RMS、分阶段训练/累积/EMA；v0.3 数据/条件/开发评估与来源隔离测试 |
 | 已准备并核验 | 官方完整 BiomedCLIP 权重，镜像下载且SHA256核对通过 |
 | 已构建并开始使用 | 七张侧表、物理16属性、严格CWT mask、独立请求参考bank、属性条件配方；真实v2库完成 |
-| 正在运行 | legion共享A：8×512 SNN与医学C，microbatch8×累积32，有效batch256；无D/EMA |
+| 当前训练入口 | legion共享A：8×512 SNN与医学C；每日规则日间20×13、夜间8×32；无D/EMA |
 | 优先 / 延后 | M12×512生成配置优先，L24×1024独立保留；B/C显存探测和真实生成训练尚待执行 |
 | 控制入口已实现 | 独立参考与局部观测分离、partial-observation来源和可见预算；完整报告聚合仍未实现 |
 | 开发评估已实现 | G0/G1轻量 evaluator、小 CNN 同预算下游、G2 三独立训练种子证据；G3 只登记操作，完整矩阵仍待研究阶段 |
@@ -286,4 +286,4 @@ G1/G2默认主闸门为strict source-only、自然分布开发query的患者等�
 
 顺序：保留当前共享A → 共享B对齐 → M生成pilot和G1 → 未达基线就继续修问题 → 达强基线后G2 → 候选SOTA后G3；资源充足再复用相同B训练L。数据、训练和评估的实际状态由真实运行报告更新，不能把配方当已执行事实。
 
-用户已授权并启动当前共享A真实长训练，代理不持续监控；人工监控与断点信息见 [legion-training.md](legion-training.md)。本次容量调整只建立M/L版本、完善转移与实验记录，不重启A或自动启动B/C/付费资源。最新入口见 [implementation-v0.3.md](implementation-v0.3.md)，历史架构和测量记录见 [implementation-v0.2.md](implementation-v0.2.md)、[engineering-v0.2.md](engineering-v0.2.md)。
+用户已授权当前共享A真实长训练及昼夜资源切换，代理不持续监控；人工监控与断点信息见 [daily-training.md](daily-training.md)。共享A已从完整断点显式切换新配方，B/C/付费资源未自动启动。最新实现入口见 [implementation-v0.3.md](implementation-v0.3.md)，历史架构和测量记录见 [implementation-v0.2.md](implementation-v0.2.md)、[engineering-v0.2.md](engineering-v0.2.md)。
