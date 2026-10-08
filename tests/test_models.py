@@ -8,7 +8,7 @@ import torch
 from triwave.config import ModelConfig
 from triwave.data.synthetic import make_synthetic_batch
 from triwave.models import SpikeWeaveModel
-from triwave.signal import MorletCWT
+from triwave.signal import CWT_MASK_PROTOCOL, MorletCWT
 from triwave.types import ConditionBatch
 
 
@@ -38,6 +38,14 @@ def setup():
         batch["text_valid"],
         batch["attribute_values"],
         batch["attribute_valid"],
+        structure_role="reference_condition",
+        structure_provenance={"origin_id": "engineering-reference", "target_derived": False,
+                              "inference_available": True, "protocol": "source-only"},
+        cwt_mask_protocol=CWT_MASK_PROTOCOL,
+        reference_provenance={"origin_id": "engineering-reference", "target_derived": False,
+                              "inference_available": True, "protocol": "source-only"},
+        attribute_origin={"origin_id": "engineering-user-frequency", "target_derived": False,
+                          "inference_available": True},
     )
     return cfg, model, cond
 

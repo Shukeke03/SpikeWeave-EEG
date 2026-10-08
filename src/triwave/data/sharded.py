@@ -190,7 +190,7 @@ def sharded_normalizer_digest(dataset: ShardedEEGDataset) -> str:
 
 def fit_sharded_statistics(dataset_or_root: ShardedEEGDataset | str | Path,
                             config: ModelConfig | None = None) -> TrainNormalizer:
-    """Fit one global affine uV scale on eligible source training windows only."""
+    """Fit source_rms_v2: one scalar uV RMS, with no mean subtraction."""
     dataset = (dataset_or_root if isinstance(dataset_or_root, ShardedEEGDataset)
                else ShardedEEGDataset(dataset_or_root, config, split="train"))
     if dataset.normalizer is not None or dataset.split not in {None, "train"}:

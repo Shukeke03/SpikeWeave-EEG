@@ -43,8 +43,17 @@ def make_synthetic_batch(config: ModelConfig, batch_size: int, seed: int = 0) ->
     return {"target_waveform": target, "target_valid": torch.ones(batch_size, config.channels, dtype=torch.bool),
             "reference_waveform": reference,
             "reference_valid": torch.ones(batch_size, config.channels, dtype=torch.bool),
+            "reference_provenance": [
+                {"origin_id": f"engineering-reference:{seed}:{i}", "target_derived": False,
+                 "inference_available": True, "protocol": "source-only",
+                 "kind": "engineering_independent_reference",
+                 "unit": "engineering_arbitrary"} for i in range(batch_size)],
             "lead_geometry": geometry, "input_ids": ids, "text_valid": masks,
             "attribute_values": attributes, "attribute_valid": attributes_valid, "class_ids": classes,
+            "attribute_origin": [
+                {"origin_id": f"engineering-user-request:{seed}:{i}", "kind": "user_requested",
+                 "target_derived": False, "inference_available": True,
+                 "unit": "engineering_arbitrary", "frequency_unit": "Hz"} for i in range(batch_size)],
             "alignment_metadata": [
                 {"instance_id": f"engineering:{seed}:{i}", "parent_id": f"engineering-parent:{seed}:{i}",
                  "patient_id": f"engineering-only:{i}", "event_ids": [],

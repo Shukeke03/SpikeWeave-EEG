@@ -6,6 +6,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
+from triwave.attributes import ATTRIBUTE_SCHEMA, waveform_attributes
 from triwave.types import AlignmentOutput
 
 
@@ -221,53 +222,36 @@ def attribute_control_loss(
     schema: tuple[str, ...],
     sample_rate: float,
     source_scale: float = 1.0,
+    waveform_valid: Tensor | None = None,
+    max_frequency: float | Tensor = 80.0,
 ) -> Tensor:
     """Explicit window-global numeric controls in declared physical units.
 
-    Numeric slots follow the saved attribute_schema. Band power is Hann-window
-    rFFT energy per bin divided by window squared norm; fractions share the
-    0.5Hz..min(80Hz,Nyquist) denominator. No diagnosis is inferred from controls.
+    Data and this differentiable loss share waveform_attributes/hann-energy-v2,
+    including the half-open [0.5, min(80,Nyquist)) support and lead weighting.
+    Only the actually supplied post-dropout mask is scored. A flat prediction
+    cannot remove a requested control by returning an invalid spectral estimate.
     """
     zero = waveform.flatten(1).sum(-1) * 0
     if values is None or valid is None or not valid.any():
         return zero
     if values.shape != valid.shape or values.shape[1] > len(schema):
         raise ValueError("numeric controls must match the saved attribute schema/masks")
-    x = waveform.float() * source_scale
-    mean = x.mean(-1)
-    centered = x - mean[..., None]
-    window = torch.hann_window(x.shape[-1], device=x.device)
-    power = torch.fft.rfft(centered * window).abs().square() / window.square().sum().clamp_min(1)
-    hz = torch.fft.rfftfreq(x.shape[-1], 1 / sample_rate, device=x.device)
-    support = (hz >= 0.5) & (hz <= min(80.0, sample_rate / 2))
-    total = power[..., support].sum(-1).clamp_min(1e-8)
-    estimates = {
-        "spectral_centroid_hz": (power[..., support] * hz[support]).sum(-1) / total,
-        "rms_uV": (x.square().mean(-1) + 1e-8).sqrt(),
-        "std_uV": (centered.square().mean(-1) + 1e-8).sqrt(),
-        "mean_uV": mean,
-        "line_length_uV": x.diff().abs().mean(-1),
-        "peak_abs_uV": x.abs().amax(-1),
-    }
-    for name, lower, upper in (
-        ("delta", 0.5, 4),
-        ("theta", 4, 8),
-        ("alpha", 8, 13),
-        ("beta", 13, 30),
-        ("gamma", 30, 80),
-    ):
-        band = (hz >= lower) & (hz < upper) & support
-        energy = power[..., band].sum(-1)
-        estimates[name + "_fraction"] = energy / total
-        estimates[name + "_log_power_uV2"] = torch.log(energy + 1e-8)
+    if source_scale <= 0:
+        raise ValueError("source amplitude scale must be positive")
+    estimates, _ = waveform_attributes(
+        waveform.float() * source_scale, waveform_valid, sample_rate, max_frequency
+    )
+    if not torch.isfinite(torch.where(valid, values, 0)).all():
+        raise ValueError("supplied physical attribute controls must be finite")
     errors = []
     for i, name in enumerate(schema[: values.shape[1]]):
-        if name not in estimates:
+        if name not in ATTRIBUTE_SCHEMA:
             if valid[:, i].any():
                 raise ValueError(f"unsupported supplied numeric control: {name}")
             estimate = zero
         else:
-            estimate = estimates[name].mean(-1)
+            estimate = estimates[:, ATTRIBUTE_SCHEMA.index(name)]
         denominator = (
             sample_rate / 2
             if name.endswith("_hz")

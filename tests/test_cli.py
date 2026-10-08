@@ -14,7 +14,6 @@ from triwave.config import ModelConfig
 from triwave.data.dataset import EEGManifestDataset, TrainNormalizer, tokenize_texts
 from triwave.data.manifest import SampleRecord, write_manifest
 from triwave.training import Trainer
-from triwave.types import ConditionBatch
 
 
 def run_cli(monkeypatch, capsys, *arguments):
@@ -104,6 +103,9 @@ def test_manifest_train_checkpoint_reference_sample_and_source_only_statistics(
     np.savez_compressed(condition_path, lead_geometry=geometry[None],
                         reference_waveform=physical_reference,
                         reference_valid=np.ones((1, config.channels), dtype=bool),
+                        reference_provenance=json.dumps({
+                            "origin_id": "source-0", "target_derived": False,
+                            "inference_available": True, "source_role": "train"}),
                         # Unknown teacher/target fields must not enter CLI conditioning.
                         target_waveform=np.full_like(physical_reference, 1e12),
                         teacher_cwt=np.full((1, config.channels, config.cwt_frequencies,
@@ -115,11 +117,13 @@ def test_manifest_train_checkpoint_reference_sample_and_source_only_statistics(
                       "--steps", "2", "--output", generated_path)
     assert sampled[-1]["status"] == "ok" and sampled[-1]["units"] == "uV"
     ids, text_valid = tokenize_texts([prompt], config)
-    conditions = ConditionBatch(
-        batch_size=1, lead_geometry=torch.from_numpy(geometry[None]),
-        reference_waveform=saved.transform(torch.from_numpy(physical_reference)),
-        reference_valid=torch.ones(1, config.channels, dtype=torch.bool),
-        input_ids=ids, text_valid=text_valid)
+    conditions = restored.conditions({
+        "lead_geometry": torch.from_numpy(geometry[None]),
+        "reference_waveform": saved.transform(torch.from_numpy(physical_reference)),
+        "reference_valid": torch.ones(1, config.channels, dtype=torch.bool),
+        "reference_provenance": {"origin_id": "source-0", "target_derived": False,
+                                 "inference_available": True, "source_role": "train"},
+        "input_ids": ids, "text_valid": text_valid})
     expected = saved.inverse_transform(restored.sample(conditions, steps=2, seed=41))
     with np.load(generated_path, allow_pickle=False) as archive:
         assert archive["waveform"].shape == (1, config.channels, config.samples)
@@ -130,6 +134,48 @@ def test_manifest_train_checkpoint_reference_sample_and_source_only_statistics(
         # This also proves reference normalization and output inverse normalization
         # happen exactly once, and unknown target fields do not affect generation.
         np.testing.assert_allclose(archive["waveform"], expected.numpy(), rtol=1e-6, atol=1e-5)
+
+    # Export explicit user requests with the same source scale and ontology.
+    source_archive = tmp_path / "source-evaluation.npz"
+    metadata = {"split": "train", "role": "source", "unit": "uV",
+                "sample_rate": config.sample_rate, "lead_names": config.lead_names[:config.channels],
+                "natural_distribution": True, "label_namespace": "engineering.binary",
+                "label_scope": "synthetic_window", "scale_protocol": "source_rms_v2",
+                "scale_fit_digest": saved.fit_manifest_digest,
+                "class_prompts": {"0": "engineering no event", "1": "engineering event"}}
+    np.savez_compressed(source_archive, waveforms=np.stack(source_waveforms), labels=[0, 1],
+                        patient_ids=["source-patient", "source-patient"],
+                        record_ids=["source-record-0", "source-record-1"],
+                        sample_ids=["source-0", "source-1"], metadata=json.dumps(metadata))
+    requests = tmp_path / "explicit-requests.npz"
+    np.savez_compressed(requests, lead_geometry=np.stack([geometry, geometry]),
+                        requested_classes=[0, 1])
+    evaluation_output = tmp_path / "generated-evaluation.npz"
+    run_cli(monkeypatch, capsys, "sample", "--checkpoint", checkpoint, "--conditions", requests,
+            "--evaluation-source", source_archive, "--steps", "1", "--device", "cpu", "--batch-size", "1",
+            "--output", evaluation_output)
+    from triwave.evaluation import load_evaluation_data
+
+    exported = load_evaluation_data(evaluation_output)
+    source = load_evaluation_data(source_archive)
+    assert exported.metadata["source_train_digest"] == source.digest
+    assert exported.metadata["algorithm"] == "SpikeWeave-EEG-v0.3"
+    assert exported.metadata["label_interpretation"] == "requested_condition_not_real_patient_diagnosis"
+    np.testing.assert_array_equal(exported.labels, [0, 1])
+    request_ids, request_valid = tokenize_texts(["engineering no event", "engineering event"], config)
+    request_chunks = []
+    for index in range(2):
+        expected_requests = restored.conditions({"lead_geometry": torch.from_numpy(geometry[None]),
+                                                 "input_ids": request_ids[index:index + 1],
+                                                 "text_valid": request_valid[index:index + 1]})
+        request_chunks.append(restored.sample(expected_requests, steps=1, seed=41 + index))
+    request_waveforms = saved.inverse_transform(torch.cat(request_chunks))
+    np.testing.assert_allclose(exported.waveforms, request_waveforms.numpy(), rtol=1e-6, atol=1e-5)
+    assert exported.metadata["budget"]["sampling_microbatch"] == 1
+    with pytest.raises(ValueError, match="disagree"):
+        run_cli(monkeypatch, capsys, "sample", "--checkpoint", checkpoint, "--conditions", requests,
+                "--prompt", "engineering no event", "--evaluation-source", source_archive,
+                "--steps", "1", "--device", "cpu", "--output", tmp_path / "conflicting.npz")
 
     resumed_output = tmp_path / "manifest-resumed"
     resumed = run_cli(monkeypatch, capsys, "train", "--manifest", manifest, "--device", "cpu",
@@ -163,3 +209,46 @@ def test_doctor_and_smoke_resume_use_public_cli_api(tmp_path, monkeypatch, capsy
         assert str(archive["units"]) == "synthetic_arbitrary_units"
         assert "no clinical efficacy measured" in str(archive["provenance"])
         assert np.isfinite(archive["waveform"]).all()
+
+
+def test_cli_development_evaluation_missing_baselines_stays_closed(tmp_path, monkeypatch, capsys):
+    config = ModelConfig.tiny()
+    paths = {}
+    rng = np.random.default_rng(101)
+    for split, role in (("train", "source"), ("validation", "query")):
+        path = tmp_path / f"{split}.npz"
+        metadata = {"split": split, "role": role, "unit": "uV", "sample_rate": config.sample_rate,
+                    "lead_names": config.lead_names[:config.channels], "natural_distribution": True,
+                    "label_namespace": "engineering.binary", "label_scope": "synthetic_window"}
+        np.savez_compressed(path, waveforms=rng.normal(size=(8, config.channels, config.samples)),
+                            labels=[0, 1] * 4, patient_ids=[f"{split}-patient-{i // 4}" for i in range(8)],
+                            record_ids=[f"{split}-record-{i}" for i in range(8)],
+                            sample_ids=[f"{split}-window-{i}" for i in range(8)],
+                            metadata=json.dumps(metadata))
+        paths[split] = path
+    ledger = tmp_path / "gates.json"
+    shared = ("--train", paths["train"], "--validation", paths["validation"], "--ledger", ledger)
+    audit = run_cli(monkeypatch, capsys, "evaluate", "--stage", "G0", *shared,
+                    "--output", tmp_path / "g0.json")[-1]
+    assert audit["gate_passed"] and not audit["test_used"]
+    screening = run_cli(monkeypatch, capsys, "evaluate", "--stage", "G1", *shared,
+                        "--updates", "2", "--batch-size", "4", "--output", tmp_path / "g1.json")[-1]
+    assert not screening["gate_passed"] and not screening["test_used"]
+    assert set(screening["downstream"]) == {"real_only", "repeat", "normalaug"}
+    assert not json.loads(ledger.read_text())["gates"]["G1"]["passed"]
+    with pytest.raises(ValueError, match="G2"):
+        run_cli(monkeypatch, capsys, "evaluate", "--stage", "G3", "--ledger", ledger,
+                "--operation", "engineering-final-test", "--output", tmp_path / "g3.json")
+
+
+def test_condition_microbatch_preserves_per_record_provenance():
+    values = {"lead_geometry": torch.zeros(3, 4, 6), "input_ids": torch.arange(12).reshape(3, 4),
+              "structure_role": ("none", "reference_condition", "partial_observation"),
+              "structure_provenance": [{"origin_id": f"sample-{i}"} for i in range(3)],
+              "cwt_mask_protocol": "cwt-all-contribution-v2", "attribute_origin": {"origin_id": "user"}}
+    selected = cli._condition_slice(values, 1, 3, 3)
+    assert selected["lead_geometry"].shape == (2, 4, 6)
+    assert selected["structure_role"] == ("reference_condition", "partial_observation")
+    assert [row["origin_id"] for row in selected["structure_provenance"]] == ["sample-1", "sample-2"]
+    assert selected["attribute_origin"] == {"origin_id": "user"}
+    torch.testing.assert_close(selected["input_ids"], values["input_ids"][1:])

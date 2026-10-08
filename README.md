@@ -8,9 +8,9 @@ SpikeWeave-EEG 是医学 EEG 条件生成与患者独立少样本增强的私有
 
 ## 当前状态
 
-2026-10-07：已实现v0.2双分支、固定对比协议与MCWave干净预测扩散。具备SNN遮挡重构、共享图文交互、导联残差门槛、六类约束、训练阶段/累积/EMA与格式2检查点。工程测试与临床研究结论分别记录；尚未训练正式临床模型或证明生成有效性。
+2026-10-08：v0.3 保留双分支、固定对比和 MCWave 扩散，并接入七张数据侧表、16 项物理属性、严格 CWT 掩码、患者/事件采样、局部观测控制及 G0–G2 开发评估。G3 保留按效果解锁的最终测试入口。尚未训练正式临床模型或证明生成有效性。
 
-[实现与运行指南](docs/implementation-v0.2.md)说明正式配置、BiomedCLIP权重准备、三个训练阶段及兼容边界。
+[最新实现与运行指南](docs/implementation-v0.3.md)说明数据迁移、条件来源、训练和评估命令；[v0.2 架构实现记录](docs/implementation-v0.2.md)保留正式模型细节。
 - EEG 分支：STAtten-8-512 的 EEG 适配版，PLIF、真实物理时间推进、脉冲与膜电位联合读出。
 - 图文分支：BiomedCLIP 前端和六层共享 Transformer；文本、图像及其联合输入共享同一 C 分支。
 - 固定对比学习：语义与结构两个读出头，多正例逐正例 log-softmax、双向平均、未知关系掩码。
@@ -44,6 +44,7 @@ spikeweave doctor --config configs/tiny.yaml --device cpu
 | [contrastive-protocol.md](docs/contrastive-protocol.md) | 固定对比学习数学定义与关系规则 |
 | [name-migration.md](docs/name-migration.md) | 本机、服务器、GitHub与环境的更名映射 |
 | [implementation-v0.2.md](docs/implementation-v0.2.md) | 当前实现、运行方法和验证边界 |
+| [implementation-v0.3.md](docs/implementation-v0.3.md) | 最新数据/条件/评估实现与兼容边界 |
 | [development.md](docs/development.md) | 历史v0.1运行记录 |
 | [dataset-chbmit-v1.md](docs/dataset-chbmit-v1.md) | 数据下载、处理及监控命令 |
 | [data-protocol.md](docs/data-protocol.md) | 数据来源、物理单位、划分和合法条件 |

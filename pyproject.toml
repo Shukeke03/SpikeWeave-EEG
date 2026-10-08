@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "spikeweave-eeg"
-version = "0.2.0"
+version = "0.3.0"
 description = "SpikeWeave-EEG: dual-branch spiking EEG and vision-language wavelet diffusion research"
 requires-python = ">=3.11"
 dependencies = [
@@ -16,6 +16,7 @@ dependencies = [
   "mne>=1.8,<2",
   "transformers>=4.57,<5",
   "safetensors>=0.4",
+  "pyarrow>=19,<25",
 ]
 
 [project.optional-dependencies]

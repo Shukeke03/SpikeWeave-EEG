@@ -15,6 +15,20 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
+CWT_NUMERIC_PROTOCOL = "triwave-morlet-v1"
+CWT_MASK_PROTOCOL = "cwt-all-contribution-v2"
+
+
+def strict_patch_valid(valid: Tensor, patch: int) -> Tensor:
+    """A numerical image patch is observed only if every contributing bin is valid."""
+    if valid.dtype != torch.bool or valid.ndim != 4:
+        raise ValueError("image validity must be boolean [B,C,F,T]")
+    if not isinstance(patch, int) or patch < 1 or any(n % patch for n in valid.shape[-2:]):
+        raise ValueError("image dimensions must be divisible by a positive patch size")
+    b, c, f, t = valid.shape
+    missing = F.max_pool2d((~valid).reshape(b * c, 1, f, t).float(), patch, patch)
+    return (missing == 0).reshape(b, c, f // patch, t // patch)
+
 
 def _signal_input(x: Tensor, samples: int | None = None) -> None:
     if x.ndim != 3 or x.shape[-1] == 0:
@@ -126,8 +140,9 @@ class MorletCWT(nn.Module):
     Morlet cone mask excludes ceil(sqrt(2)*scale) samples at each window edge.
     Interior missing samples invalidate the entire truncated kernel support.
     Masked adaptive mean pooling acts on linear |W|**2, then log(power+1e-12).
-    A pooled bin is valid if at least one valid coefficient contributes; all
-    invalid bins are zero with an accompanying False mask.
+    A pooled bin is valid only if ALL of its contributing coefficient positions
+    are valid (cwt-all-contribution-v2). The numeric kernel protocol remains
+    triwave-morlet-v1; invalid bins are zero with an accompanying False mask.
 
     ``time_valid`` accepts [B,C,L], [B,1,L], [B,L], or [B,C]. CPU and CUDA FFT
     are supported. This implementation explicitly rejects MPS FFT; use CPU or
@@ -141,6 +156,7 @@ class MorletCWT(nn.Module):
         min_frequency: float = 2.0,
         max_frequency: float = 80.0,
         time_bins: int = 128,
+        mask_protocol: str = CWT_MASK_PROTOCOL,
     ) -> None:
         super().__init__()
         if not math.isfinite(sample_rate) or sample_rate <= 0:
@@ -151,6 +167,10 @@ class MorletCWT(nn.Module):
             raise ValueError("time_bins must be a positive integer")
         if not 0 < min_frequency < max_frequency < sample_rate / 2:
             raise ValueError("frequencies must lie strictly between zero and Nyquist")
+        if mask_protocol != CWT_MASK_PROTOCOL:
+            raise ValueError("legacy CWT masks require explicit data migration to cwt-all-contribution-v2")
+        self.numeric_protocol = CWT_NUMERIC_PROTOCOL
+        self.mask_protocol = mask_protocol
         self.sample_rate = float(sample_rate)
         self.time_bins = time_bins
         self.omega0 = 6.0
@@ -230,7 +250,9 @@ class MorletCWT(nn.Module):
             weights = valid.to(dtype=dtype)
             numerator = F.adaptive_avg_pool1d(power * weights, self.time_bins)
             denominator = F.adaptive_avg_pool1d(weights, self.time_bins)
-            pooled_valid = denominator > 0
+            # adaptive_avg_pool bins can overlap when length/time_bins are not
+            # divisible. max-pooling shares exactly those contributing bins.
+            pooled_valid = F.adaptive_max_pool1d((~valid).to(dtype), self.time_bins) == 0
             pooled_power = numerator / denominator.clamp_min(self.epsilon)
             log_power = torch.log(pooled_power + self.epsilon)
             log_power = torch.where(pooled_valid, log_power, 0)

@@ -8,7 +8,14 @@ import pywt
 import torch
 from torch.nn import functional as F
 
-from triwave.signal import MorletCWT, WaveletTransform, lead_cycle_residual
+from triwave.signal import (
+    CWT_MASK_PROTOCOL,
+    CWT_NUMERIC_PROTOCOL,
+    MorletCWT,
+    WaveletTransform,
+    lead_cycle_residual,
+    strict_patch_valid,
+)
 
 
 @pytest.mark.parametrize("samples,levels", [(128, 3), (256, 2), (1024, 3)])
@@ -92,20 +99,47 @@ def test_cwt_sinusoid_frequency_and_amplitude_scaling():
     torch.testing.assert_close(louder[valid], expected_louder[valid], atol=1e-10, rtol=1e-10)
 
 
-def test_cwt_pooling_is_linear_power_before_log():
+@pytest.mark.parametrize("bins", [16, 17, 64])
+def test_cwt_pooling_is_linear_power_before_log(bins):
     full = MorletCWT(128.0, frequencies=8, min_frequency=6, max_frequency=48, time_bins=256)
-    pooled = MorletCWT(128.0, frequencies=8, min_frequency=6, max_frequency=48, time_bins=16)
+    pooled = MorletCWT(128.0, frequencies=8, min_frequency=6, max_frequency=48, time_bins=bins)
     x = torch.randn(1, 1, 256, dtype=torch.float64)
     fine, fine_valid = full(x)
     coarse, coarse_valid = pooled(x)
     power = (fine.exp() - full.epsilon).clamp_min(0) * fine_valid
-    numerator = F.adaptive_avg_pool1d(power.flatten(0, 1), 16)
-    denominator = F.adaptive_avg_pool1d(fine_valid.double().flatten(0, 1), 16)
-    expected_valid = denominator > 0
+    numerator = F.adaptive_avg_pool1d(power.flatten(0, 1), bins)
+    denominator = F.adaptive_avg_pool1d(fine_valid.double().flatten(0, 1), bins)
+    expected_valid = F.adaptive_max_pool1d((~fine_valid).double().flatten(0, 1), bins) == 0
     expected = torch.log(numerator / denominator.clamp_min(full.epsilon) + full.epsilon)
     expected = torch.where(expected_valid, expected, 0).reshape_as(coarse)
     assert torch.equal(coarse_valid, expected_valid.reshape_as(coarse_valid))
     torch.testing.assert_close(coarse, expected, atol=1e-9, rtol=1e-9)
+    assert ((denominator > 0) & ~expected_valid).any()  # Mixed COI bins were valid under v1.
+
+
+def test_cwt_pooling_missing_support_invalidates_entire_contributing_bin():
+    fine = MorletCWT(128, 8, 8, 48, 256)
+    coarse = MorletCWT(128, 8, 8, 48, 17)
+    x = torch.randn(1, 1, 256)
+    mask = torch.ones_like(x, dtype=torch.bool)
+    mask[..., 128] = False
+    _, fine_valid = fine(x, mask)
+    view, valid = coarse(x, mask)
+    expected = F.adaptive_max_pool1d((~fine_valid).float().flatten(0, 1), 17) == 0
+    assert torch.equal(valid, expected.reshape_as(valid))
+    assert (view[~valid] == 0).all()
+    assert fine.numeric_protocol == CWT_NUMERIC_PROTOCOL == "triwave-morlet-v1"
+    assert fine.mask_protocol == CWT_MASK_PROTOCOL == "cwt-all-contribution-v2"
+    with pytest.raises(ValueError, match="migration"):
+        MorletCWT(128, 8, 8, 48, 17, mask_protocol="at-least-one-v1")
+
+
+def test_image_patch_requires_all_contributing_bins():
+    valid = torch.ones(1, 2, 8, 8, dtype=torch.bool)
+    valid[0, 0, 1, 1] = False
+    patch = strict_patch_valid(valid, 4)
+    assert patch.shape == (1, 2, 2, 2)
+    assert patch.sum() == 7 and not patch[0, 0, 0, 0]
 
 
 def test_cwt_boundary_low_frequency_zero_and_fully_missing():

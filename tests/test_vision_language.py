@@ -122,3 +122,22 @@ def test_numeric_adaptation_masks_teacher_pixels_before_stem():
     a.square().mean().backward()
     assert encoder.image_stem.weight.grad.abs().sum() > 0
     assert encoder.numeric_reconstruction_head.weight.grad.abs().sum() > 0
+
+
+def test_incomplete_image_patches_are_absent_even_if_some_pixels_are_observed():
+    cfg = ModelConfig.tiny()
+    encoder = SharedVisionLanguageEncoder(cfg).eval()
+    image = torch.randn(2, 4, 16, 32)
+    valid = torch.ones_like(image, dtype=torch.bool)
+    valid[:, :, 0, 0] = False
+    geometry = torch.randn(2, 4, 6)
+    before = encoder(image, valid, lead_geometry=geometry)
+    changed = image.clone()
+    # Every pixel of an incomplete patch is excluded, including its valid ones.
+    changed[:, :, :4, :4] = 10000
+    after = encoder(changed, valid, lead_geometry=geometry)
+    torch.testing.assert_close(before.tokens, after.tokens, atol=0, rtol=0)
+    valid[:, :, ::4, ::4] = False
+    absent = encoder(image, valid, lead_geometry=geometry)
+    assert not absent.structural_valid.any() and not absent.present.any()
+    assert torch.isfinite(absent.tokens).all()

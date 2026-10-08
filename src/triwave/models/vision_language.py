@@ -16,6 +16,7 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 
 from triwave.config import ModelConfig
+from triwave.signal import strict_patch_valid
 from triwave.types import BranchOutput
 
 from .attention import TransformerBlock, sinusoidal_embedding
@@ -147,8 +148,9 @@ class SharedVisionLanguageEncoder(nn.Module):
         if not torch.isfinite(safe).all():
             raise ValueError("observed CWT must be finite")
         p = cfg.visual_patch
-        coverage = F.avg_pool2d(valid.reshape(b * c, 1, f, t).float(), p, p).flatten(2)[:, 0]
-        token_valid = coverage > 0
+        token_valid = strict_patch_valid(valid, p).reshape(b * c, -1)
+        # Partial patches are absent tokens, not partially observed summaries.
+        coverage = token_valid.to(image.dtype)
         tokens = self.image_stem(safe.reshape(b * c, 1, f, t)).flatten(2).transpose(1, 2)
         tokens = torch.where(token_valid[..., None], tokens, 0)
         if self.medical is None:
@@ -250,8 +252,8 @@ class SharedVisionLanguageEncoder(nn.Module):
                 if structure_valid is None
                 else structure_valid.bool()
             )
-            image_presence = iv.flatten(1).any(-1)
             image, coverage = self._visual(structure, iv)
+            image_presence = coverage.flatten(1).bool().any(-1)
             rows, cols = cfg.cwt_frequencies // cfg.visual_patch, cfg.cwt_times // cfg.visual_patch
             hz = (
                 torch.logspace(
