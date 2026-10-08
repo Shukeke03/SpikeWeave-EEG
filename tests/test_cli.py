@@ -347,6 +347,9 @@ def test_cuda_memory_fraction_is_explicit_and_applied_before_training(monkeypatc
         cli._set_cuda_memory_limit(SimpleNamespace(cuda_memory_fraction=0.43), torch.device("cpu"))
     cli._set_cuda_memory_limit(SimpleNamespace(cuda_memory_fraction=0.43), torch.device("cuda:0"))
     assert applied == [(0.43, torch.device("cuda:0"))]
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: 2)
+    cli._set_cuda_memory_limit(SimpleNamespace(cuda_memory_fraction=0.47), torch.device("cuda"))
+    assert applied[-1] == (0.47, torch.device("cuda:2"))
 
 
 def test_manifest_training_preserves_precreated_launcher_files(

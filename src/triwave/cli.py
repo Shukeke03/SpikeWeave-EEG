@@ -80,7 +80,9 @@ def _set_cuda_memory_limit(args: argparse.Namespace, device: torch.device) -> No
         raise ValueError("CUDA memory fraction must be finite and in (0, 1]")
     if device.type != "cuda":
         raise ValueError("CUDA memory fraction requires a CUDA device")
-    torch.cuda.set_per_process_memory_fraction(fraction, device)
+    # PyTorch requires an explicit CUDA index here, unlike Tensor.to("cuda").
+    indexed_device = device if device.index is not None else torch.device("cuda", torch.cuda.current_device())
+    torch.cuda.set_per_process_memory_fraction(fraction, indexed_device)
 
 
 def _training_output(args: argparse.Namespace) -> Path:
