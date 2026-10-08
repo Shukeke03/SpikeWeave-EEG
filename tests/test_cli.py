@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -252,3 +253,127 @@ def test_condition_microbatch_preserves_per_record_provenance():
     assert [row["origin_id"] for row in selected["structure_provenance"]] == ["sample-1", "sample-2"]
     assert selected["attribute_origin"] == {"origin_id": "user"}
     torch.testing.assert_close(selected["input_ids"], values["input_ids"][1:])
+
+
+def test_manifest_periodic_checkpoints_resume_at_optimizer_boundaries(
+        tmp_path, monkeypatch, capsys, physical_manifest):
+    _, manifest, _, _, _ = physical_manifest
+    output = tmp_path / "periodic-training"
+    saved = []
+    original_save = Trainer.save
+
+    def record_save(trainer, path):
+        original_save(trainer, path)
+        checkpoint = torch.load(path, weights_only=True)
+        assert checkpoint["microstep"] % checkpoint["training_config"]["gradient_accumulation"] == 0
+        assert checkpoint["step"] == trainer.step
+        assert not path.with_suffix(path.suffix + ".tmp").exists()
+        saved.append(trainer.step)
+
+    monkeypatch.setattr(Trainer, "save", record_save)
+    reports = run_cli(
+        monkeypatch, capsys, "train", "--manifest", manifest, "--device", "cpu",
+        "--steps", "3", "--batch-size", "2", "--gradient-accumulation", "2",
+        "--checkpoint-every", "2", "--checkpoint-seconds", "0", "--output", output)
+    assert saved == [2, 3]
+    assert reports[-1]["step"] == 3
+    assert [row["step"] for row in reports if row.get("status") == "checkpoint_saved"] == [2]
+    metrics = [json.loads(row) for row in (output / "metrics.jsonl").read_text().splitlines()]
+    assert len(metrics) == 6
+    assert [row["optimizer_updated"] for row in metrics] == [0, 1, 0, 1, 0, 1]
+    assert all(row["elapsed_seconds"] >= row["microstep_seconds"] >= 0 for row in metrics)
+    assert all((row["step_seconds"] is None) == (not row["optimizer_updated"]) for row in metrics)
+    restored = Trainer.load(output / "last.pt", resume_optimizer=True)
+    assert restored.step == 3 and restored.microstep == 6 and restored.optimizer.state
+    run = json.loads((output / "run.json").read_text())
+    assert run["status"] == "complete" and run["completed_step"] == run["target_step"] == 3
+    assert run["effective_batch_size"] == 4 and run["gradient_accumulation"] == 2
+    assert run["steps_semantics"] == "additional_optimizer_updates"
+    assert run["data"]["metadata_sha256"] == cli._file_digest(manifest)
+    assert "clinical" not in json.dumps(run["args"])
+
+    resumed = run_cli(
+        monkeypatch, capsys, "train", "--manifest", manifest, "--device", "cpu",
+        "--steps", "2", "--batch-size", "2", "--resume", output / "last.pt",
+        "--checkpoint-every", "2", "--checkpoint-seconds", "0", "--output", output)
+    assert saved == [2, 3, 5]
+    assert resumed[-1]["step"] == 5
+    continued = Trainer.load(output / "last.pt", resume_optimizer=True)
+    assert continued.step == 5 and continued.microstep == 10 and continued.optimizer.state
+    assert continued.run_provenance["source_data_identity"] == restored.run_provenance["source_data_identity"]
+    run = json.loads((output / "run.json").read_text())
+    assert run["start_step"] == 3 and run["target_step"] == run["completed_step"] == 5
+    assert run["resume_data_iterator"] == "restart"
+
+
+def test_manifest_time_checkpoint_and_output_recipe_guards(
+        tmp_path, monkeypatch, capsys, physical_manifest):
+    _, manifest, _, _, _ = physical_manifest
+    output = tmp_path / "time-checkpoint"
+    clock = iter(range(100))
+    monkeypatch.setattr(cli.time, "monotonic", lambda: float(next(clock)))
+    reports = run_cli(
+        monkeypatch, capsys, "train", "--manifest", manifest, "--device", "cpu",
+        "--steps", "2", "--batch-size", "2", "--gradient-accumulation", "2",
+        "--checkpoint-every", "0", "--checkpoint-seconds", "0.1", "--output", output)
+    assert [row["step"] for row in reports if row.get("status") == "checkpoint_saved"] == [1, 2]
+    before = (output / "last.pt").read_bytes()
+    with pytest.raises(ValueError, match="nonempty"):
+        run_cli(monkeypatch, capsys, "train", "--manifest", manifest, "--device", "cpu",
+                "--steps", "1", "--output", output)
+    with pytest.raises(ValueError, match="training options differ"):
+        run_cli(monkeypatch, capsys, "train", "--manifest", manifest, "--device", "cpu",
+                "--resume", output / "last.pt", "--gradient-accumulation", "1",
+                "--steps", "1", "--output", tmp_path / "conflicting-recipe")
+    assert (output / "last.pt").read_bytes() == before
+    modified_manifest = tmp_path / "modified-manifest.jsonl"
+    modified_manifest.write_text(manifest.read_text() + "\n")
+    with pytest.raises(ValueError, match="data identity differs"):
+        run_cli(monkeypatch, capsys, "train", "--manifest", modified_manifest, "--device", "cpu",
+                "--resume", output / "last.pt", "--steps", "1", "--batch-size", "2",
+                "--output", tmp_path / "conflicting-data")
+
+
+def test_cuda_memory_fraction_is_explicit_and_applied_before_training(monkeypatch):
+    applied = []
+    monkeypatch.setattr(torch.cuda, "set_per_process_memory_fraction",
+                        lambda fraction, device: applied.append((fraction, device)))
+    cli._set_cuda_memory_limit(SimpleNamespace(), torch.device("cpu"))
+    assert applied == []
+    for fraction in (0, -0.1, 1.1, float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="fraction"):
+            cli._set_cuda_memory_limit(SimpleNamespace(cuda_memory_fraction=fraction), torch.device("cuda"))
+    with pytest.raises(ValueError, match="requires a CUDA"):
+        cli._set_cuda_memory_limit(SimpleNamespace(cuda_memory_fraction=0.43), torch.device("cpu"))
+    cli._set_cuda_memory_limit(SimpleNamespace(cuda_memory_fraction=0.43), torch.device("cuda:0"))
+    assert applied == [(0.43, torch.device("cuda:0"))]
+
+
+def test_manifest_training_preserves_precreated_launcher_files(
+        tmp_path, monkeypatch, capsys, physical_manifest):
+    _, manifest, _, _, _ = physical_manifest
+    output = tmp_path / "background-training"
+    output.mkdir()
+    log = output / "train.log"
+    launch = output / "launcher.json"
+    log.write_text("launcher stdout fixture\n")
+    launch.write_text('{"background": true}\n')
+    reports = run_cli(monkeypatch, capsys, "train", "--manifest", manifest,
+                      "--device", "cpu", "--steps", "1", "--batch-size", "2", "--output", output)
+    assert reports[-1]["status"] == "ok" and (output / "last.pt").is_file()
+    assert log.read_text() == "launcher stdout fixture\n"
+    assert launch.read_text() == '{"background": true}\n'
+
+
+@pytest.mark.parametrize("stage", ["pretrain", "align"])
+def test_representation_smoke_saves_without_untrained_diffusion_sampling(
+        stage, tmp_path, monkeypatch, capsys):
+    output = tmp_path / stage
+    report = run_cli(monkeypatch, capsys, "smoke", "--device", "cpu", "--stage", stage,
+                     "--steps", "1", "--output", output)[-1]
+    assert report["status"] == "ok" and report["step"] == 1
+    assert report["representation_only"] is True
+    assert report["generated_shape"] is report["sampler"] is None
+    assert (output / "last.pt").is_file() and not (output / "generated.npz").exists()
+    restored = Trainer.load(output / "last.pt", resume_optimizer=True)
+    assert restored.step == 1 and restored.active_stage == stage

@@ -17,7 +17,7 @@ from .vision_language import SharedVisionLanguageEncoder
 
 
 class SpikeWeaveModel(nn.Module):
-    def __init__(self, config: ModelConfig):
+    def __init__(self, config: ModelConfig, *, include_denoiser: bool = True):
         super().__init__()
         config.validate()
         self.config = config
@@ -28,7 +28,7 @@ class SpikeWeaveModel(nn.Module):
         self.eeg_encoder = SpikingEEGEncoder(config)
         self.condition_encoder = SharedVisionLanguageEncoder(config)
         self.geometry_projection = nn.Linear(6, config.condition_dim)
-        self.denoiser = MCWave(config, self.band_lengths)
+        self.denoiser = MCWave(config, self.band_lengths) if include_denoiser else None
 
     @property
     def waveform_encoder(self):
@@ -140,6 +140,8 @@ class SpikeWeaveModel(nn.Module):
         lead_geometry: Tensor,
         basis: MontageSubspace | None = None,
     ) -> Tensor:
+        if self.denoiser is None:
+            raise RuntimeError("representation-only models do not contain a diffusion denoiser")
         physical = state if basis is None else basis.lift(state)
         prediction = self.denoiser(physical, time, condition, lead_geometry)
         return prediction if basis is None else basis.reduce(prediction, require_audit=False)
@@ -152,6 +154,8 @@ class SpikeWeaveModel(nn.Module):
         lead_geometry: Tensor | None = None,
         **drop_flags: bool,
     ) -> Tensor:
+        if self.denoiser is None:
+            raise RuntimeError("representation-only models do not contain a diffusion denoiser")
         if isinstance(conditions, ConditionBatch):
             fused = self.encode_conditions(conditions, **drop_flags)
             lead_geometry = conditions.lead_geometry

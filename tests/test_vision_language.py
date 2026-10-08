@@ -105,6 +105,31 @@ def test_actual_openclip_hf_timm_checkpoint_interface_without_medical_claim(tmp_
     torch.testing.assert_close(
         c.image_stem.weight, c.medical.visual.trunk.patch_embed.proj.weight.sum(1, keepdim=True)
     )
+    # Non-reentrant checkpointing must preserve gradients through the frozen
+    # medical trunk into the numerical stem and positional adaptation parameters.
+    checked = SharedVisionLanguageEncoder(replace(config, activation_checkpointing=True)).train()
+    checked.load_state_dict(c.state_dict())
+    c.train()
+    c.zero_grad(set_to_none=True)
+    numeric_mask = torch.rand(2, 4, 1, 2) < 0.4
+    numeric_mask[0, 0, 0, 0] = False
+    results, states = [], []
+    for encoder in (c, checked):
+        torch.manual_seed(91)
+        numeric = encoder.numeric_reconstruction(image, valid, numeric_mask)
+        numeric.square().mean().backward()
+        results.append(numeric.detach())
+        states.append(torch.get_rng_state())
+    torch.testing.assert_close(results[0], results[1])
+    assert torch.equal(states[0], states[1])
+    checked_parameters = dict(checked.named_parameters())
+    for name, parameter in c.named_parameters():
+        other = checked_parameters[name]
+        assert (parameter.grad is None) == (other.grad is None)
+        if parameter.grad is not None:
+            torch.testing.assert_close(parameter.grad, other.grad, rtol=1e-5, atol=1e-6)
+    assert checked.image_stem.weight.grad.abs().sum() > 0
+    assert all(parameter.grad is None for parameter in checked.medical.parameters())
 
 
 def test_numeric_adaptation_masks_teacher_pixels_before_stem():

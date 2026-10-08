@@ -69,7 +69,8 @@ class Trainer:
         config.validate()
         training.validate()
         self.config, self.training, self.device = config, training, torch.device(device)
-        self.model = SpikeWeaveModel(config).to(self.device)
+        generation_stage = training.stage in {"diffusion", "joint_smoke"}
+        self.model = SpikeWeaveModel(config, include_denoiser=generation_stage).to(self.device)
         self.wavelet = WaveletTransform(config.samples, config.wavelet_levels, config.wavelet).to(
             self.device
         )
@@ -88,11 +89,20 @@ class Trainer:
         self.last_sampler_stats = {}
         self.protocol_migration = None
         self.run_provenance = {}
+        self.ema_denoiser = None
         self._configure_stage(training.stage)
-        self.ema_denoiser = copy.deepcopy(self.model.denoiser).eval().requires_grad_(False)
+        if generation_stage:
+            self.ema_denoiser = copy.deepcopy(self.model.denoiser).eval().requires_grad_(False)
 
     def _configure_stage(self, stage):
         self.active_stage = stage
+        if stage in {"pretrain", "align"}:
+            # Representation training never allocates or checkpoints the unused
+            # 800M-parameter generator, including an alignment-only stage switch.
+            self.model.denoiser = None
+            self.ema_denoiser = None
+        elif self.model.denoiser is None:
+            raise ValueError("create a generation-stage Trainer and initialize its representation weights")
         for name, p in self.model.named_parameters():
             medical_frozen = ".medical." in name
             if stage == "align" and medical_frozen:
@@ -501,9 +511,10 @@ class Trainer:
             self.optimizer.step()
             self.optimizer.zero_grad(set_to_none=True)
             self.step += 1
-            with torch.no_grad():
-                for ema, p in zip(self.ema_denoiser.parameters(), self.model.denoiser.parameters()):
-                    ema.lerp_(p.detach(), 1 - self.training.ema_decay)
+            if self.active_stage in {"diffusion", "joint_smoke"}:
+                with torch.no_grad():
+                    for ema, p in zip(self.ema_denoiser.parameters(), self.model.denoiser.parameters()):
+                        ema.lerp_(p.detach(), 1 - self.training.ema_decay)
         metrics.update(
             step=self.step,
             microstep=self.microstep,
@@ -515,6 +526,8 @@ class Trainer:
 
     @torch.no_grad()
     def sample(self, conditions, steps=50, guidance=2.0, seed=0, use_ema=True):
+        if self.active_stage not in {"diffusion", "joint_smoke"} or self.model.denoiser is None:
+            raise ValueError("representation checkpoints cannot sample EEG; train the diffusion stage first")
         if guidance < 0:
             raise ValueError("guidance must be nonnegative")
         self.model.eval()
@@ -613,7 +626,7 @@ class Trainer:
                 "hard_audit_approved": self.hard_audit_approved,
                 "representation_initialized": self.representation_initialized,
                 "model": self.model.state_dict(),
-                "ema": self.ema_denoiser.state_dict(),
+                "ema": self.ema_denoiser.state_dict() if self.ema_denoiser is not None else None,
                 "optimizer": self.optimizer.state_dict(),
                 "step": self.step,
                 "microstep": self.microstep,
@@ -637,13 +650,21 @@ class Trainer:
             raise ValueError("protocol migration loads numeric weights only; optimizer resume is forbidden")
         trainer = cls(
             ModelConfig(**checkpoint["model_config"]),
-            TrainingConfig(**checkpoint["training_config"]),
+            replace(TrainingConfig(**checkpoint["training_config"]), stage=checkpoint["active_stage"]),
             device,
         )
         if trainer.active_stage != checkpoint["active_stage"]:
             trainer._configure_stage(checkpoint["active_stage"])
-        trainer.model.load_state_dict(checkpoint["model"])
-        trainer.ema_denoiser.load_state_dict(checkpoint["ema"])
+        state = checkpoint["model"]
+        if trainer.model.denoiser is None:
+            # Earlier representation checkpoints also stored a random unused
+            # denoiser and EMA. Ignore only those keys, keeping E/C loads strict.
+            state = {key: value for key, value in state.items() if not key.startswith("denoiser.")}
+        trainer.model.load_state_dict(state, strict=True)
+        if trainer.ema_denoiser is not None:
+            if checkpoint.get("ema") is None:
+                raise ValueError("generation checkpoints require their trained denoiser EMA")
+            trainer.ema_denoiser.load_state_dict(checkpoint["ema"], strict=True)
         trainer.step, trainer.microstep = checkpoint["step"], checkpoint["microstep"]
         trainer.normalization = checkpoint.get("normalization")
         trainer.hard_audit_approved = checkpoint.get("hard_audit_approved", False)

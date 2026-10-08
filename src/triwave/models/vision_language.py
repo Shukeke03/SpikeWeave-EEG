@@ -14,6 +14,7 @@ from pathlib import Path
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
+from torch.utils.checkpoint import checkpoint
 
 from triwave.config import ModelConfig
 from triwave.signal import strict_patch_valid
@@ -139,6 +140,23 @@ class SharedVisionLanguageEncoder(nn.Module):
             self.medical.eval()
         return self
 
+    @staticmethod
+    def _medical_visual_block(block: nn.Module, tokens: Tensor, mask: Tensor) -> Tensor:
+        """Apply an official ViT block with explicit EEG-view token validity."""
+        value = torch.where(mask[..., None], block.norm1(tokens), 0)
+        batch, count, dim = value.shape
+        heads = block.attn.num_heads
+        q, k, v = block.attn.qkv(value).reshape(batch, count, 3, heads, dim // heads).permute(
+            2, 0, 3, 1, 4
+        )
+        q, k = block.attn.q_norm(q), block.attn.k_norm(k)
+        attended = F.scaled_dot_product_attention(
+            q, k, v, attn_mask=mask[:, None, None, :], dropout_p=0.0
+        ).transpose(1, 2).reshape(batch, count, dim)
+        tokens = tokens + block.ls1(block.attn.proj(attended))
+        tokens = tokens + block.ls2(block.mlp(block.norm2(tokens)))
+        return torch.where(mask[..., None], tokens, 0)
+
     def _visual(self, image: Tensor, valid: Tensor) -> tuple[Tensor, Tensor]:
         cfg = self.config
         b, c, f, t = image.shape
@@ -179,21 +197,11 @@ class SharedVisionLanguageEncoder(nn.Module):
             tokens = trunk.norm_pre(tokens)
             # Reuse pretrained ViT weights with explicit key/query missingness.
             for block in trunk.blocks:
-                value = torch.where(mask[..., None], block.norm1(tokens), 0)
-                heads, dim = block.attn.num_heads, value.shape[-1]
-                q, k, v = (
-                    block.attn.qkv(value)
-                    .reshape(b * c, -1, 3, heads, dim // heads)
-                    .permute(2, 0, 3, 1, 4)
-                )
-                q, k = block.attn.q_norm(q), block.attn.k_norm(k)
-                attended = F.scaled_dot_product_attention(
-                    q, k, v, attn_mask=mask[:, None, None, :], dropout_p=0.0
-                )
-                attended = attended.transpose(1, 2).reshape(b * c, -1, dim)
-                tokens = tokens + block.ls1(block.attn.proj(attended))
-                tokens = tokens + block.ls2(block.mlp(block.norm2(tokens)))
-                tokens = torch.where(mask[..., None], tokens, 0)
+                if cfg.activation_checkpointing and self.training and torch.is_grad_enabled():
+                    tokens = checkpoint(self._medical_visual_block, block, tokens, mask,
+                                        use_reentrant=False, preserve_rng_state=True)
+                else:
+                    tokens = self._medical_visual_block(block, tokens, mask)
             tokens = trunk.norm(tokens)[:, 1:]
         tokens = torch.where(token_valid[..., None], tokens, 0)
         return tokens.reshape(b, c, -1, cfg.condition_dim), coverage.reshape(b, c, -1)

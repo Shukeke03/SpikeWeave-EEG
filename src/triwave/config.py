@@ -88,6 +88,7 @@ class ModelConfig:
     snn_chunk_sizes: tuple[int, ...] = (4, 4, 4, 4, 8, 8, 8, 8)
     snn_drop_path: float = 0.1
     representation_dropout: float = 0.1
+    activation_checkpointing: bool = False
     frontend_backend: str = "offline"
     frontend_test_fixture: bool = False
     biomedclip_checkpoint: str = "microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224"
@@ -142,6 +143,8 @@ class ModelConfig:
             raise ValueError("text_backend must be offline or clinicalbert")
         if not 0 <= self.dropout < 1:
             raise ValueError("dropout must lie in [0, 1)")
+        if not isinstance(self.activation_checkpointing, bool):
+            raise ValueError("activation_checkpointing must be boolean")
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> ModelConfig:

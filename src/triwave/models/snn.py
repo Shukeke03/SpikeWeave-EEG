@@ -15,6 +15,7 @@ import math
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
+from torch.utils.checkpoint import checkpoint
 
 from triwave.config import ModelConfig
 from triwave.types import BranchOutput
@@ -325,7 +326,11 @@ class SpikingEEGEncoder(nn.Module):
         tokens = torch.where(patch_valid[..., None], tokens, 0).transpose(1, 2)
         sequence_valid = patch_valid.transpose(1, 2)
         for block in self.blocks:
-            tokens = block(tokens, sequence_valid)
+            if cfg.activation_checkpointing and self.training and torch.is_grad_enabled():
+                tokens = checkpoint(block, tokens, sequence_valid, use_reentrant=False,
+                                    preserve_rng_state=True)
+            else:
+                tokens = block(tokens, sequence_valid)
         spike, membrane = self.readout_lif(tokens, sequence_valid)
         readout = tokens + self.readout(torch.cat((spike, membrane), -1).to(tokens.dtype))
         readout = torch.where(sequence_valid[..., None], readout, 0).transpose(1, 2)
