@@ -45,6 +45,7 @@ spikeweave doctor --config configs/tiny.yaml --device cpu
 | [name-migration.md](docs/name-migration.md) | 本机、服务器、GitHub与环境的更名映射 |
 | [implementation-v0.2.md](docs/implementation-v0.2.md) | 当前实现、运行方法和验证边界 |
 | [implementation-v0.3.md](docs/implementation-v0.3.md) | 最新数据/条件/评估实现与兼容边界 |
+| [engineering-v0.3.md](docs/engineering-v0.3.md) | 本机204项、legion206项测试与GPU恢复实测 |
 | [development.md](docs/development.md) | 历史v0.1运行记录 |
 | [dataset-chbmit-v1.md](docs/dataset-chbmit-v1.md) | 数据下载、处理及监控命令 |
 | [data-protocol.md](docs/data-protocol.md) | 数据来源、物理单位、划分和合法条件 |
