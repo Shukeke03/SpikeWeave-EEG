@@ -53,6 +53,9 @@ def main():
                     pass
     except OSError:
         pass
+    if "sampling_epoch" in latest:
+        epoch = latest["sampling_epoch"]
+        print(f"Epoch (this run): completed {epoch}, current {epoch + 1}")
     for key in ("step", "microstep", "loss", "masked_patch", "spectral", "numeric_visual_reconstruction",
                 "learning_rate", "elapsed_seconds", "peak_cuda_allocated_mib", "peak_cuda_reserved_mib"):
         if key in latest:
