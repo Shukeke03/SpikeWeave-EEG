@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import math
 from dataclasses import asdict, dataclass, replace
@@ -25,6 +26,14 @@ from triwave.signal import (
     strict_patch_valid,
 )
 from triwave.types import ConditionBatch, condition_rows
+
+# E/C transfer may change generation capacity and execution/file locations,
+# but never the meaning of the representation inputs or attention operators.
+# coefficient_patch is used exclusively by MCWave, not either encoder.
+REPRESENTATION_TRANSFER_CONFIG_EXCEPTIONS = frozenset({
+    "denoiser_dim", "denoiser_heads", "denoiser_depth", "coefficient_patch",
+    "activation_checkpointing", "biomedclip_local_path", "frontend_text_config_path",
+})
 
 
 @dataclass
@@ -587,7 +596,21 @@ class Trainer:
         return {"source": protocols, "destination": cls.condition_protocols(), "weights_only": True}
 
     def initialize_representation(self, path, *, allow_protocol_migration=False):
-        checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+        """Transfer E/C, validating semantics and clinical source provenance first.
+
+        The destination owns its generator, geometry projection, EMA, optimizer
+        and counters. An A/B checkpoint's unused generator capacity is only
+        metadata and may differ from the destination M/L generator.
+        """
+        # A running source job may atomically replace last.pt. Read the hash and
+        # checkpoint through the same open inode so lineage identifies exactly
+        # the weights loaded, even if its pathname changes during this method.
+        digest = hashlib.sha256()
+        with Path(path).open("rb") as handle:
+            for block in iter(lambda: handle.read(1024**2), b""):
+                digest.update(block)
+            handle.seek(0)
+            checkpoint = torch.load(handle, map_location="cpu", weights_only=True)
         if checkpoint.get("format_version") != 2 or checkpoint.get("active_stage") not in {
             "pretrain",
             "align",
@@ -596,6 +619,71 @@ class Trainer:
                 "representation initialization requires a v0.2 pretrain/align checkpoint"
             )
         migration = self._checkpoint_protocol_migration(checkpoint, allow_protocol_migration)
+        source_config = ModelConfig(**checkpoint["model_config"])
+        source_config.validate()
+
+        def signature(config):
+            fields = {key: value for key, value in config.to_dict().items()
+                      if key not in REPRESENTATION_TRANSFER_CONFIG_EXCEPTIONS}
+            # Configurations round-trip through both YAML lists and tuple-valued
+            # dataclass fields; these are the same representation definition.
+            return json.loads(json.dumps(fields))
+
+        source_signature, target_signature = signature(source_config), signature(self.config)
+        differences = [key for key in target_signature
+                       if source_signature[key] != target_signature[key]]
+        if differences:
+            raise ValueError("representation config differs in semantic fields: "
+                             + ", ".join(sorted(differences)))
+
+        source_provenance = checkpoint.get("run_provenance", {})
+        if not isinstance(source_provenance, dict):
+            raise ValueError("representation source provenance must be a mapping")
+        source_normalization = checkpoint.get("normalization")
+        target_normalization = self.normalization
+        source_identity = source_provenance.get("source_data_identity")
+        target_identity = self.run_provenance.get("source_data_identity")
+
+        if any(value is not None for value in (
+                source_normalization, target_normalization, source_identity, target_identity)):
+            from triwave.data.dataset import TrainNormalizer
+
+            def validated_normalization(value):
+                if value is None:
+                    raise ValueError("clinical representation transfer requires source RMS normalization")
+                normalizer = TrainNormalizer.from_dict(value)
+                if normalizer.scale_protocol != "source_rms_v2" or not normalizer.fit_manifest_digest:
+                    raise ValueError("clinical representation transfer requires fitted source_rms_v2")
+                return normalizer.to_dict()
+
+            source_normalization = validated_normalization(source_normalization)
+            if target_normalization is not None:
+                target_normalization = validated_normalization(target_normalization)
+                if target_normalization != source_normalization:
+                    raise ValueError("representation source RMS normalization differs from destination")
+            else:
+                target_normalization = copy.deepcopy(source_normalization)
+
+            def validated_identity(value, normalization):
+                if (not isinstance(value, dict) or not isinstance(value.get("kind"), str)
+                        or not value["kind"] or not isinstance(value.get("metadata_sha256"), str)
+                        or len(value["metadata_sha256"]) != 64
+                        or any(char not in "0123456789abcdef" for char in value["metadata_sha256"])
+                        or value.get("source_scale_fit_digest") != normalization["fit_manifest_digest"]):
+                    raise ValueError("clinical representation transfer requires consistent source data identity")
+                return value
+
+            source_identity = validated_identity(source_identity, source_normalization)
+            if target_identity is not None:
+                validated_identity(target_identity, target_normalization)
+                if target_identity != source_identity:
+                    raise ValueError("representation source data identity differs from destination")
+            else:
+                target_identity = copy.deepcopy(source_identity)
+            if (self.active_stage == "diffusion" and
+                    (checkpoint["active_stage"] != "align" or checkpoint.get("step", 0) <= 0)):
+                raise ValueError("clinical diffusion requires an already trained align representation checkpoint")
+        states = {}
         for name in ("eeg_encoder", "condition_encoder"):
             prefix = name + "."
             state = {
@@ -603,7 +691,30 @@ class Trainer:
                 for key, value in checkpoint["model"].items()
                 if key.startswith(prefix)
             }
+            expected = getattr(self.model, name).state_dict()
+            if state.keys() != expected.keys():
+                raise ValueError(f"representation {name} checkpoint keys differ from destination")
+            if any(not isinstance(value, Tensor) or value.shape != expected[key].shape
+                   for key, value in state.items()):
+                raise ValueError(f"representation {name} checkpoint tensor shapes differ from destination")
+            states[name] = state
+
+        lineage = {
+            "checkpoint": str(Path(path).resolve()), "checkpoint_sha256": digest.hexdigest(),
+            "source_stage": checkpoint["active_stage"], "source_optimizer_step": checkpoint.get("step", 0),
+            "source_capacity": {key: getattr(source_config, key)
+                                for key in ("denoiser_depth", "denoiser_dim", "denoiser_heads")},
+            "source_seed": source_provenance.get("generator_training_seed"),
+            "source_run_provenance": copy.deepcopy(source_provenance),
+            "weights_only": True,
+        }
+        # Commit only after both encoders and every metadata check passed.
+        for name, state in states.items():
             getattr(self.model, name).load_state_dict(state, strict=True)
+        self.normalization = target_normalization
+        if target_identity is not None:
+            self.run_provenance["source_data_identity"] = target_identity
+        self.run_provenance["representation_initialization"] = lineage
         self.representation_initialized = True
         if migration is not None:
             self.protocol_migration = migration

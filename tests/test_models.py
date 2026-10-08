@@ -139,7 +139,7 @@ def test_target_alignment_has_no_generation_cache_and_both_branches_receive_grad
         )
 
 
-def test_main_research_config_has_fixed_full_scale_dimensions():
+def test_main_research_config_has_shared_encoders_and_primary_m_generator():
     cfg = ModelConfig.from_yaml("configs/research-5090.yaml")
     assert (cfg.dim, cfg.encoder_depth, cfg.heads, cfg.waveform_patch) == (512, 8, 8, 16)
     assert (cfg.condition_dim, cfg.fusion_depth, cfg.condition_heads, cfg.text_max_length) == (
@@ -149,9 +149,9 @@ def test_main_research_config_has_fixed_full_scale_dimensions():
         256,
     )
     assert (cfg.denoiser_dim, cfg.denoiser_depth, cfg.denoiser_heads, cfg.coefficient_patch) == (
-        1024,
-        24,
-        16,
+        512,
+        12,
+        8,
         16,
     )
     assert cfg.frontend_backend == "biomedclip"

@@ -4,13 +4,15 @@
 
 ## 阶段与配置
 
-实际 GPU 是 RTX 3060 Laptop，6144 MiB；目标总占用约 3072 MiB。正式 MCWave 为 799,622,976 参数，FP32 权重加 EMA 就约 5.96 GiB，无法仅减小 batch 达到这个预算。因此本次启动 **Stage A 信号重构与数值视觉适配**，使用 `configs/legion-pretrain.yaml`，保留正式 8×512 PLIF EEG encoder、官方 BiomedCLIP 前端及 6×768 共享 C 配置。不在 Stage A/B 构建尚未参与训练的生成器或 EMA；它们会在 Stage C 按正式配置构建。
+实际 GPU 是 RTX 3060 Laptop，6144 MiB；目标总占用约 3072 MiB。启动时的24×1024生成器为799,622,976参数，FP32权重加EMA约5.96 GiB，无法仅减小batch达到这个预算。因此已启动 **Stage A 信号重构与数值视觉适配**，使用 `configs/legion-pretrain.yaml`，保留正式8×512 PLIF EEG encoder、官方BiomedCLIP前端及6×768共享C。不在Stage A/B构建生成器或EMA。
+
+现确立两个容量版本：M12×512（105,769,728生成器参数）优先，L24×1024延后，见 [capacity-versions.md](capacity-versions.md)。A/B供两版共用；现有运行继续按旧断点保存的配置，不重启或改写元数据。Stage C将分别构建M/L，在独立目录保存生成器、geometry projection、optimizer与EMA。M的C阶段显存仍需实测，不能把当前一半显存目标直接套用。
 
 开启 SNN/医学 ViT block 激活重计算，保留 RNG 与 PLIF 梯度；冻结医学 ViT 仍向数值 stem 反传。BF16 矩阵运算、FP32 神经元状态、AdamW、有效 batch256、lr1e-4、warmup5000、最多100000次优化更新保持阶段 A 配置。实际 microbatch 由真实数据显存探测决定，梯度累积到256。Stage A 没有对比损失；之后 Stage B 的对比候选数量不能用累积伪造。本次不会自动进入 B/C，也不把表征 checkpoint 当作能生成 EEG 的模型。
 
 探测用 `scripts/probe_training_memory.py`，每个候选独立进程，以 accumulation=1 完成两次真实 optimizer 更新，包含 Adam 状态分配，再测试两次累积 microstep，检查已有 Adam 状态及保留梯度时的峰值。CUDA allocator fraction 最终设0.47，为驱动/context留空间；总占用另由 `nvidia-smi` 核实。这是 allocator 上限，不能保证其他 GPU 应用不会另占显存。
 
-实测最终配置：**microbatch8 × accumulation32 = effective batch256**。batch8在0.43的保守限制下触及上限；根据约166 MiB驱动/context开销调整为0.47后通过累积稳态测试。峰值 allocated2563.37 MiB、reserved2834 MiB，`nvidia-smi`总占用3000/6144 MiB（48.8%）。4个真实microstep/3次optimizer更新约14.42秒，不能直接当作长跑吞吐。完整E/C参数272964625，官方医学权重严格加载；未降低主干宽度或层数。
+实测最终配置：**microbatch8 × accumulation32 = effective batch256**。batch8在0.43的保守限制下触及上限；根据约166 MiB驱动/context开销调整为0.47后通过累积稳态测试。峰值allocated2563.37 MiB、reserved2834 MiB，`nvidia-smi`总占用3000/6144 MiB（48.8%）。4个真实microstep/3次optimizer更新约14.42秒，不能直接当作长跑吞吐。无D模型总参数272,964,625，其中E/C为272,959,249，另有5,376参数的geometry projection未在A/B训练；官方医学权重严格加载，未降低表征宽度或层数。
 
 ## 数据与权重
 
@@ -29,6 +31,8 @@ ssh -t legion 'cd /home/shuxing/workspace/SpikeWeave-EEG && watch -n 2 "python3 
 ```
 
 Ctrl+C只关闭监控，训练独立于 SSH 会话继续。不会部署自动持续监控任务。完成表征预训练不等于完成扩散训练或证明临床性能。
+
+现有A后续续训使用`--resume runs/legion-pretrain-20261008/last.pt`，不额外传`--config`；它保留启动时D24元数据，虽然A没有构造D。新M默认不会追溯改变运行的Python进程或断点。后续B使用新的`--init-representation`入口，再将已训练的B交给M/L；不能将A的optimizer或随机D跨容量恢复。
 
 本机完整测试215 passed、2 CUDA skips；legion完整测试217 passed、无skip。真实v2数值审计16个source窗口通过，DWT最大误差4.7684e-6，属性/CWT masks核对通过，query数值读取0。仅运行必要数据与训练工程验收，未开始G1–G3效果评估。
 

@@ -1,3 +1,6 @@
+# Shared representation stage for both SpikeWeave-EEG-M and -L.
+# Generator dimensions are M metadata only; Stage A/B never allocate MCWave.
+# Resume existing jobs from their saved checkpoint recipe, without replacing it.
 # Formal Stage A; measured microbatch=8, accumulation=32, effective batch=256.
 # Keep the full E/C architecture; checkpoint activations to fit the 6GB laptop GPU.
 model:
@@ -34,9 +37,9 @@ model:
   text_depth: 12
   fusion_depth: 6
   attribute_dim: 16
-  denoiser_dim: 1024
-  denoiser_heads: 16
-  denoiser_depth: 24
+  denoiser_dim: 512
+  denoiser_heads: 8
+  denoiser_depth: 12
   dropout: 0.0
   projection_dim: 512
   lead_names:

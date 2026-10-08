@@ -1,8 +1,8 @@
-# SpikeWeave-EEG：固定双分支架构 v0.2
+# SpikeWeave-EEG：固定双分支架构与 M/L 容量
 
-日期：2026-10-07。状态：固定研究设计已实现为v0.2并进行工程验证，临床效果尚未测量。此文取代历史三分支设计；实际入口与边界见implementation-v0.2.md。
+初始设计日期：2026-10-07；本次容量修订：2026-10-08。双分支架构已实现，并在 v0.3 接入数据与评估协议；临床效果尚未测量。此文取代历史三分支设计，最新入口与边界见 [implementation-v0.3.md](implementation-v0.3.md)。
 
-2026-10-08：最新数据迁移和按效果分阶段评估汇总于 [project-plan.md](project-plan.md)。低预算开发不改变本文固定双分支和六约束。
+2026-10-08：最新数据迁移和按效果分阶段评估汇总于 [project-plan.md](project-plan.md)。当前先训练 MCWave-M，资源充足后训练 MCWave-L；固定双分支、小波扩散和六约束均保留。legion 已启动真实 EEG 的共享阶段 A 表征训练，尚无训练完成的生成模型或生成有效性结果。容量与检查点规则见 [capacity-versions.md](capacity-versions.md)。
 
 ## 1. 名称与信息流
 
@@ -70,7 +70,14 @@ L_representation=L_alignment+1.0 L_masked_patch+0.1 L_spectral。时间patch遮�
 
 ## 6. MCWave连续值生成器
 
-主力采用DiT-L容量24层/1024维/16heads/FFN4096；XL scaling为28层/1152维/16heads。SNN仅用于表征与独立reference条件；每个扩散状态由连续Transformer处理。
+主力先采用 MCWave-M；资源充足后再训练 MCWave-L。二者使用同一 E/C 架构与完整生成机制，只改变生成器宽度、深度和注意力 heads。M 是需要实验证实的验证起点，并非已证明的 EEG 最优容量。
+
+| 版本 | blocks / dim / heads / FFN | MCWave 参数 | 完整模型参数 |
+|---|---|---:|---:|
+| M：当前主力 | 12 / 512 / 8 / 2048 | 105,769,728 | 378,734,353 |
+| L：后续扩容 | 24 / 1024 / 16 / 4096 | 799,622,976 | 1,072,587,601 |
+
+这些参数量来自当前实现的工程核算，包括完整模型中的冻结医学前端。MCWave 的每个 block 包含多种注意力与调制，不能将相同层数/宽度直接等同于标准 DiT 的参数量。历史 XL 配置 28层/1152维/16heads 保留为更晚的扩容候选。SNN仅用于表征与独立reference条件；每个扩散状态由连续Transformer处理。
 
 设X∈R^(C×T)，montage矩阵B_m，Q_m∈R^(C×r)为col(B_m)正交基，时间正交DWT矩阵W∈R^(T×T)。
 
@@ -107,7 +114,9 @@ L_generation=E[w(s) MSE(Z0_hat,Z0)+g(s) sum(lambda_k L_k)]。软约束不替代�
 | B双分支对齐 | 1e-4 | 解冻高层时1e-5 | 256 |
 | C生成 | 5e-5 | 初始冻结表征主干 | 256 |
 
-AdamW betas=(0.9,0.95)，表征weight decay0.05、生成0.01；bias/norm/神经元时间常数不decay。warmup5000updates、cosine decay、gradient clip1、generator EMA0.9999、矩阵运算BF16。病例独立验证决定checkpoint与容量，不按3060压缩设计。23个CHB患者不能因切出许多窗口就视为大独立样本库。
+AdamW betas=(0.9,0.95)，表征weight decay0.05、生成0.01；bias/norm/神经元时间常数不decay。warmup5000updates、cosine decay、gradient clip1、generator EMA0.9999、矩阵运算BF16。病例独立验证决定checkpoint与容量；当前 M/L 保留相同 E/C、数据与机制，生成器容量通过后续实验比较。23个CHB患者不能因切出许多窗口就视为大独立样本库。
+
+A/B 训练共享 E/C，不构造或保存未训练的 MCWave 与其 EMA。M/L 分别从同一已验收的表征检查点初始化，再独立训练阶段 C；生成器和优化器状态不能跨容量直接续训。5,376 参数的导联几何投影不参与 A/B 优化，阶段 C 与各版 MCWave 一起训练。当前 legion 阶段 A 使用 microbatch8、梯度累积32、有效batch256及激活重计算；阶段 B 的对比候选池仍以单个实际 microbatch 为准，梯度累积不扩大候选池。运行中的 A 续训沿用保存的检查点配置，不能因为默认 D 元数据改为 M 就替换其训练配方。
 
 生成条件模式：图文40%、仅文本40%、仅图像10%、全语义空10%；非空模式独立reference提供概率25%。全空时同时清除text/image/attributes/reference，必要montage/fs/unit元数据保留。没有真实图文配对不凭空制造新语义。
 

@@ -58,9 +58,11 @@ class ModelConfig:
         "gamma_log_power_uV2",
         "peak_abs_uV",
     )
-    denoiser_dim: int = 1024
-    denoiser_heads: int = 16
-    denoiser_depth: int = 24
+    # MCWave-M is the default; research-l.yaml retains the 24 x 1024 option.
+    # These dimensions affect only the generator, so E/C checkpoints are shared.
+    denoiser_dim: int = 512
+    denoiser_heads: int = 8
+    denoiser_depth: int = 12
     dropout: float = 0.0
     projection_dim: int = 512
 

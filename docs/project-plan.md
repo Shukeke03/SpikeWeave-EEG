@@ -1,6 +1,6 @@
 # SpikeWeave-EEG 项目总方案
 
-更新：2026-10-08。状态：固定研究方案；v0.3 已实现双分支数据侧表、属性/局部观测控制和 G0–G2 开发评估入口；全量临床迁移、正式训练和真实效果仍待运行验证。
+更新：2026-10-08。状态：v0.3 双分支数据库已在 legion 构建，官方医学权重已准备，共享 Stage A 正在真实 CHB-MIT 上预训练。确立 M（12×512）为优先扩散版本、L（24×1024）为后续扩容版本；B/C 尚未启动，生成和真实增强效果仍待测量。
 
 本文汇总目前确立的架构、数据、训练、评估和推进顺序。最新调整以本文及链接的专题协议为准；历史三分支原型不再作为主方案。
 
@@ -99,7 +99,7 @@ flowchart LR
 
 ### 3.4 MCWave 与约束
 
-主配置：24 层/1024 维/16 heads/FFN 4096；XL 为 28 层/1152 维。连续 Transformer 处理扩散状态；SNN 处理 EEG 表征与合法参考。
+主配置 M：12 层/512 维/8 heads/FFN 2048，MCWave 105,769,728 参数。后续扩容 L：24 层/1024 维/16 heads/FFN 4096，MCWave 799,622,976 参数。两版共用 E/C 和数据，生成器/geometry projection/optimizer/EMA 独立；默认选择 M。连续 Transformer 处理扩散状态；SNN 处理 EEG 表征与合法参考。完整配置、参数量和阶段转移见 [capacity-versions.md](capacity-versions.md)。
 
 设 montage 差分矩阵为 B，Q 为 col(B) 的正交基，W 为完整正交 DWT。硬模式定义 `Z0=Qᵀ X Wᵀ`，VP 路径为 `Zs=αs Z0+σs ε`，`αs²+σs²=1`。tokenizer 前先由 Q lift 到真实导联；head 返回 clean 系数后 reduce/lift，再 IDWT。默认 audit 模式保留完整测量空间，不静默删除真实残差。
 
@@ -165,7 +165,7 @@ JET 原始 TV 单列对照，主方案使用差分匹配。独立参考 CWT 是�
 - 6 项：频谱质心、RMS、std、mean、平均相邻点绝对差、各导联峰绝对幅值的均值。
 - 5 项比例和 5 项 log-energy：δ[0.5,4)、θ[4,8)、α[8,13)、β[13,30)、γ[30,80) Hz。
 - 物理 µV 上逐导联计算，再在有效导联等权平均；频谱估计只为测量而去均值，采用 Hann rFFT，保留算法定义，不将所有能量称为校准 PSD 密度。
-- 提取器与可微损失共用 `[0.5,80)` 和相同估计定义；当前 loss 的上端点口径需同步修改。
+- 提取器与可微损失共用 `[0.5,80)` 和相同估计定义，已同步频段上端点和有效 mask。
 - 保存值、单位、有效范围、源带宽、算法版本与来源；不从属性推断没有标注的疾病。
 - 分开 `teacher_attributes`、`condition_attributes`、`evaluation_attributes`。训练目标派生属性可作为明示源训练条件；部署/测试条件来自用户、合法参考或支持集。
 - 非空条件样本 50% 不给属性；其余随机提供 1–4 个有效属性。全空 CFG 样本清除属性和参考。
@@ -190,7 +190,7 @@ JET 原始 TV 单列对照，主方案使用差分匹配。独立参考 CWT 是�
 
 验收必须覆盖患者/事件/记录/上下文泄漏、单位和极性、尺度可逆、DWT 重建、CWT 坐标/有效性、真实 montage 残差、条件来源、QC 与事件保留数。工程闸门不能作为临床真实性证明。
 
-详见 [data-protocol.md](data-protocol.md)、[dataset-chbmit-v1.md](dataset-chbmit-v1.md)。新侧表、严格 mask 和独立请求参考入口已有代码和工程测试；全量真实临床资产的完成状态需由实际构建报告确认。
+legion 已完成 dualbranch-v2：七张表及额外资产合计180,659,334 bytes，复用54,959,070,550 bytes的v1处理信号，共837,181窗口（train519,047、validation66,418、test251,716）。634记录可用、52记录隔离、0处理失败。代表性16个source窗口数值验收通过，DWT最大误差4.7684e-6、query数值读取0；这不等于全库hard montage批准或临床效果验证。容量变化不改变物理视图和尺度，不重新处理或复制该数据集。详见 [data-protocol.md](data-protocol.md)、[dataset-chbmit-v1.md](dataset-chbmit-v1.md)、[legion-training.md](legion-training.md)。
 
 ## 5. 训练配置与资源
 
@@ -202,7 +202,7 @@ JET 原始 TV 单列对照，主方案使用差分匹配。独立参考 CWT 是�
 
 AdamW=(0.9,0.95)，bias/norm/神经元时间常数无 decay；warmup 5000 updates、cosine、clip=1、generator EMA=0.9999；BF16 矩阵运算、FP32 膜态。100000 updates 是正式起点，不是自动启动任务或必须耗尽的预算。开发先匹配预算做 pilot，按验证表现推进。
 
-A/B 默认直接 batch 256；C microbatch 4、accumulation 64。优化器有效 batch 不能当作对比候选池：当前对比候选仍为实际 microbatch，改变它要记账。
+A/B 理想起点为直接 batch256。当前3060上的共享A已经实测，使用microbatch8、accumulation32达到256，开启激活重计算并限制约一半显存。B 的实际候选池和显存另行测量，不能把梯度累积当作256个对比候选。M/L 的 C 模板为microbatch4、accumulation64，正式资源上重新探测稳态显存后调整并记录；不保证 C 能沿用当前 A 的显存预算。
 
 图文40%、text40%、image10%、all-null10%；非空独立 reference 保留概率25%。属性缺失按 v2 数据配方执行。平衡训练按 source 标签计数/患者/事件组织；未标注有效源窗可作为单独无监督重构样本，不伪造负标签。验证/query 保持自然类别分布。
 
@@ -210,7 +210,7 @@ v0.3 CLI 对 v2 源训练库使用类别/患者/事件分层；合格未标注�
 
 主采样 Heun 50 积分区间、CFG 初值2；验证扫描1/1.5/2/3。当前实现50区间=101预测器调用，CFG2为202网络调用；公平比较记录真实 NFE 与耗时，不只列 steps。
 
-本机：`/Users/shuxing/AIlearning/SpikeWeave-EEG`；legion：`/home/shuxing/workspace/SpikeWeave-EEG`。环境 `spikeweave-eeg`，下载工具 `spikeweave-download`。数据在 Git 外；本机开发→私有 GitHub→legion 拉取。当前显卡是工程过渡，不降低正式设计；付费长训练另行执行。
+本机：`/Users/shuxing/AIlearning/SpikeWeave-EEG`；legion：`/home/shuxing/workspace/SpikeWeave-EEG`。环境 `spikeweave-eeg`，下载工具 `spikeweave-download`。数据在 Git 外；本机开发→私有 GitHub→legion 拉取。当前显卡承担共享A预训练；生成先推进M，资源充足后再训练L。A/B没有D，因此保留已有A断点和进程，严格续训不套用新M配置；B完成后将相同表征通过初始化传给独立M/L作业。付费资源未自动启动。
 
 ## 6. 分阶段评估：先达到强基线，再完整验证
 
@@ -274,12 +274,14 @@ G1/G2默认主闸门为strict source-only、自然分布开发query的患者等�
 | 状态 | 内容 |
 |---|---|
 | 已实现并工程验证 | E/C、固定对比、signed DWT clean VP、六类约束、RMS、分阶段训练/累积/EMA；v0.3 数据/条件/开发评估与来源隔离测试 |
-| 尚需准备/验证 | 官方完整 BiomedCLIP 权重、正式大模型显存与真实临床训练 |
-| 已实现、临床资产待构建 | 七张侧表、物理16属性、严格CWT mask、独立请求参考bank、属性条件配方 |
+| 已准备并核验 | 官方完整 BiomedCLIP 权重，镜像下载且SHA256核对通过 |
+| 已构建并开始使用 | 七张侧表、物理16属性、严格CWT mask、独立请求参考bank、属性条件配方；真实v2库完成 |
+| 正在运行 | legion共享A：8×512 SNN与医学C，microbatch8×累积32，有效batch256；无D/EMA |
+| 优先 / 延后 | M12×512生成配置优先，L24×1024独立保留；B/C显存探测和真实生成训练尚待执行 |
 | 控制入口已实现 | 独立参考与局部观测分离、partial-observation来源和可见预算；完整报告聚合仍未实现 |
 | 开发评估已实现 | G0/G1轻量 evaluator、小 CNN 同预算下游、G2 三独立训练种子证据；G3 只登记操作，完整矩阵仍待研究阶段 |
 | 当前结论 | 没有实测临床生成、SOTA、泛化或隐私保护结论 |
 
-顺序：完成v2数据迁移与G0 → 单种子pilot和G1 → 未达基线就继续修问题 → 达强基线后G2 → 候选SOTA后G3。数据、训练和评估的实际状态必须由真实运行报告更新，不能把本文配方当已执行事实。
+顺序：保留当前共享A → 共享B对齐 → M生成pilot和G1 → 未达基线就继续修问题 → 达强基线后G2 → 候选SOTA后G3；资源充足再复用相同B训练L。数据、训练和评估的实际状态由真实运行报告更新，不能把配方当已执行事实。
 
-当前代码交付执行工程测试，不启动临床长训练、持续下载监控或付费资源。最新入口见 [implementation-v0.3.md](implementation-v0.3.md)，历史架构和测量记录见 [implementation-v0.2.md](implementation-v0.2.md)、[engineering-v0.2.md](engineering-v0.2.md)。
+用户已授权并启动当前共享A真实长训练，代理不持续监控；人工监控与断点信息见 [legion-training.md](legion-training.md)。本次容量调整只建立M/L版本、完善转移与实验记录，不重启A或自动启动B/C/付费资源。最新入口见 [implementation-v0.3.md](implementation-v0.3.md)，历史架构和测量记录见 [implementation-v0.2.md](implementation-v0.2.md)、[engineering-v0.2.md](engineering-v0.2.md)。

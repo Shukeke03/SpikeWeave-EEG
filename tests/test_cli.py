@@ -14,7 +14,7 @@ from triwave import cli
 from triwave.config import ModelConfig
 from triwave.data.dataset import EEGManifestDataset, TrainNormalizer, tokenize_texts
 from triwave.data.manifest import SampleRecord, write_manifest
-from triwave.training import Trainer
+from triwave.training import Trainer, TrainingConfig
 
 
 def run_cli(monkeypatch, capsys, *arguments):
@@ -380,3 +380,42 @@ def test_representation_smoke_saves_without_untrained_diffusion_sampling(
     assert (output / "last.pt").is_file() and not (output / "generated.npz").exists()
     restored = Trainer.load(output / "last.pt", resume_optimizer=True)
     assert restored.step == 1 and restored.active_stage == stage
+
+
+def test_representation_initialization_lineage_survives_synthetic_cli(
+        tmp_path, monkeypatch, capsys):
+    source = Trainer(ModelConfig.tiny(), TrainingConfig(stage="pretrain", warmup_steps=0))
+    source.run_provenance = {"generator_training_seed": 17}
+    path = tmp_path / "source-pretrain.pt"
+    source.save(path)
+    output = tmp_path / "shared-align"
+    report = run_cli(monkeypatch, capsys, "smoke", "--device", "cpu", "--stage", "align",
+                     "--init-representation", path, "--steps", "1", "--output", output)[-1]
+    assert report["representation_only"] is True
+    restored = Trainer.load(output / "last.pt")
+    lineage = restored.run_provenance["representation_initialization"]
+    assert lineage["checkpoint_sha256"] == cli._file_digest(path)
+    assert lineage["source_stage"] == "pretrain" and lineage["source_seed"] == 17
+    assert restored.run_provenance["generator_training_seed"] == 41
+
+
+def test_formal_clinical_diffusion_rejects_missing_alignment_before_model_allocation(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "_config", lambda args: ModelConfig.from_yaml("configs/research-m.yaml"))
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("missing alignment must fail before allocating the clinical model")
+
+    monkeypatch.setattr(cli, "Trainer", forbidden)
+    with pytest.raises(ValueError, match="clinical diffusion requires --init-representation"):
+        run_cli(monkeypatch, capsys, "train", "--manifest", tmp_path / "unused-data",
+                "--steps", "1", "--device", "cpu", "--output", tmp_path / "missing-align")
+
+
+@pytest.mark.parametrize("version,shape", [("m", [12, 512, 8]), ("l", [24, 1024, 16])])
+def test_named_capacity_doctor_validates_without_loading_medical_weights(
+        version, shape, monkeypatch, capsys):
+    report = run_cli(monkeypatch, capsys, "doctor", "--config", f"configs/research-{version}.yaml",
+                     "--config-only", "--device", "cpu")[-1]
+    assert report["mcwave"] == shape and report["representation_branches"] == 2
+    assert report["generator_capacity"]["version"] == version.upper()

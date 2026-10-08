@@ -121,6 +121,13 @@ def _validate_resume_options(args: argparse.Namespace, trainer: Trainer) -> None
         raise ValueError("resume seed differs from the saved checkpoint")
 
 
+def _generator_configuration(config: ModelConfig, stage: str) -> dict:
+    capacity = (config.denoiser_depth, config.denoiser_dim, config.denoiser_heads)
+    return {"version": {(12, 512, 8): "M", (24, 1024, 16): "L"}.get(capacity, "custom"),
+            "depth": capacity[0], "dim": capacity[1], "heads": capacity[2],
+            "active": stage in {"diffusion", "joint_smoke"}}
+
+
 def doctor(args: argparse.Namespace) -> None:
     import mne
     import pywt
@@ -135,7 +142,8 @@ def doctor(args: argparse.Namespace) -> None:
                "eeg": [config.encoder_depth, config.dim, config.heads],
                "shared_condition": [config.fusion_depth, config.condition_dim, config.condition_heads],
                "mcwave": [config.denoiser_depth, config.denoiser_dim, config.denoiser_heads],
-               "frontend_backend": config.frontend_backend, "montage_mode": config.montage_mode})
+               "frontend_backend": config.frontend_backend, "montage_mode": config.montage_mode,
+               "generator_capacity": _generator_configuration(config, "diffusion")})
         return
     model = TriWaveModel(config)
     _emit({"python": platform.python_version(), "platform": platform.platform(),
@@ -157,11 +165,11 @@ def train_synthetic(args: argparse.Namespace) -> None:
     device = select_device(args.device)
     trainer = (Trainer.load(args.resume, device, resume_optimizer=True) if args.resume
                else Trainer(_config(args), _training_config(args), device))
-    if getattr(args, "init_representation", None) and not args.resume:
-        trainer.initialize_representation(args.init_representation)
     if not args.resume:
         trainer.run_provenance = {"generator_training_seed": args.seed,
                                   "data_kind": "synthetic_engineering_check"}
+        if getattr(args, "init_representation", None):
+            trainer.initialize_representation(args.init_representation)
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
     if device.type == "cuda":
@@ -224,6 +232,10 @@ def train_manifest(args: argparse.Namespace) -> None:
             raise ValueError("clinical manifest training requires a checkpoint with train normalization")
     else:
         config = _config(args)
+        training = _training_config(args)
+        if (training.stage == "diffusion" and config.frontend_backend == "biomedclip"
+                and not config.frontend_test_fixture and not args.init_representation):
+            raise ValueError("clinical diffusion requires --init-representation from a trained align checkpoint")
         if dualbranch:
             raw_train = DualBranchEEGDataset(shard_root, config=config, split="train")
             normalizer = raw_train.normalizer
@@ -235,7 +247,7 @@ def train_manifest(args: argparse.Namespace) -> None:
         else:
             raw_train = EEGManifestDataset(args.manifest, config=config, split="train", role="source")
             normalizer = TrainNormalizer().fit(raw_train)
-        trainer = Trainer(config, _training_config(args), device)
+        trainer = Trainer(config, training, device)
         if normalizer.scale_protocol != "source_rms_v2":
             raise ValueError("refit source_rms_v2; legacy affine normalizers cannot train v0.3")
         trainer.normalization = normalizer.to_dict()
@@ -294,6 +306,9 @@ def train_manifest(args: argparse.Namespace) -> None:
                         drop_last=len(dataset) >= args.batch_size)
     if getattr(args, "init_representation", None) and not args.resume:
         trainer.initialize_representation(args.init_representation)
+    if (trainer.active_stage == "diffusion" and trainer.config.frontend_backend == "biomedclip"
+            and not trainer.config.frontend_test_fixture and not trainer.representation_initialized):
+        raise ValueError("clinical diffusion checkpoint has no initialized aligned representation")
     start_step = trainer.step
     started_at = _utc_now()
     # This allowlist records paths/recipes, never EEG samples, clinical text or credentials.
@@ -306,6 +321,8 @@ def train_manifest(args: argparse.Namespace) -> None:
     run = {"status": "running", "started_at": started_at, "code_commit": _code_revision(),
            "args": recorded_args, "model_config": trainer.config.to_dict(),
            "training_config": asdict(trainer.training), "stage": trainer.active_stage,
+           "generator_capacity": _generator_configuration(trainer.config, trainer.active_stage),
+           "representation_source": trainer.run_provenance.get("representation_initialization"),
            "seed": trainer.run_provenance.get("generator_training_seed", args.seed),
            "data": {"path": str(data_path.resolve()), "train_windows": len(dataset), **source_identity},
            "batch_size": args.batch_size, "gradient_accumulation": accumulation,

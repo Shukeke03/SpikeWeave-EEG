@@ -1,3 +1,5 @@
+# Compatibility configuration for primary SpikeWeave-EEG-M (12 x 512).
+# Use research-l.yaml explicitly for the later 24 x 1024 capacity comparison.
 model:
   channels: 16
   samples: 1024
@@ -32,9 +34,9 @@ model:
   text_depth: 12
   fusion_depth: 6
   attribute_dim: 16
-  denoiser_dim: 1024
-  denoiser_heads: 16
-  denoiser_depth: 24
+  denoiser_dim: 512
+  denoiser_heads: 8
+  denoiser_depth: 12
   dropout: 0.0
   projection_dim: 512
   lead_names:
