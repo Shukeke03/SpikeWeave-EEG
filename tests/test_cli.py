@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import signal
 import sys
 from types import SimpleNamespace
 
@@ -419,3 +420,71 @@ def test_named_capacity_doctor_validates_without_loading_medical_weights(
                      "--config-only", "--device", "cpu")[-1]
     assert report["mcwave"] == shape and report["representation_branches"] == 2
     assert report["generator_capacity"]["version"] == version.upper()
+
+
+def test_manifest_recipe_fork_preserves_source_and_records_batch_change(
+        tmp_path, monkeypatch, capsys, physical_manifest):
+    import yaml
+
+    config, manifest, _, _, _ = physical_manifest
+    source_config = tmp_path / "source-config.yaml"
+    source_config.write_text(yaml.safe_dump({"model": config.to_dict(), "training": {
+        "stage": "pretrain", "gradient_accumulation": 4, "effective_batch_size": 8,
+        "warmup_steps": 0}}))
+    source = tmp_path / "source-training"
+    run_cli(monkeypatch, capsys, "train", "--manifest", manifest, "--config", source_config,
+            "--device", "cpu", "--steps", "1", "--batch-size", "2", "--output", source)
+    original = (source / "last.pt").read_bytes()
+    target_config = tmp_path / "target-config.yaml"
+    fields = config.to_dict() | {"denoiser_dim": 64, "denoiser_depth": 3}
+    target_config.write_text(yaml.safe_dump({"model": fields, "training": {
+        "stage": "pretrain", "gradient_accumulation": 3, "effective_batch_size": 6,
+        "warmup_steps": 0}}))
+    target = tmp_path / "forked-training"
+    report = run_cli(monkeypatch, capsys, "train", "--manifest", manifest, "--config", target_config,
+                     "--fork-resume", source / "last.pt", "--device", "cpu", "--steps", "1",
+                     "--batch-size", "2", "--output", target)[-1]
+    assert report["step"] == 2
+    assert (source / "last.pt").read_bytes() == original
+    restored = Trainer.load(target / "last.pt", resume_optimizer=True)
+    assert restored.step == 2 and restored.microstep == 6 and restored.optimizer.state
+    run = json.loads((target / "run.json").read_text())
+    assert run["start_step"] == 1 and run["target_step"] == 2
+    assert run["effective_batch_size"] == 6 and run["resume_data_iterator"] == "restart"
+    assert run["recipe_fork"]["checkpoint_sha256"] == cli._file_digest(source / "last.pt")
+    source_trainer = Trainer.load(source / "last.pt")
+    assert restored.run_provenance["source_data_identity"] == source_trainer.run_provenance["source_data_identity"]
+    with pytest.raises(ValueError, match="resume model config differs"):
+        run_cli(monkeypatch, capsys, "train", "--manifest", manifest, "--config", target_config,
+                "--resume", source / "last.pt", "--device", "cpu", "--steps", "1",
+                "--batch-size", "2", "--output", tmp_path / "ordinary-resume-conflict")
+
+
+def test_stop_signal_waits_for_complete_accumulation_and_restores_handlers(
+        tmp_path, monkeypatch, capsys, physical_manifest):
+    _, manifest, _, _, _ = physical_manifest
+    original_step = Trainer.train_step
+    previous_handler = signal.getsignal(signal.SIGTERM)
+    called = []
+
+    def request_stop(trainer, batch, **kwargs):
+        metrics = original_step(trainer, batch, **kwargs)
+        called.append(metrics["microstep"])
+        if len(called) == 1:
+            handler = signal.getsignal(signal.SIGTERM)
+            assert callable(handler)
+            handler(signal.SIGTERM, None)
+        return metrics
+
+    monkeypatch.setattr(Trainer, "train_step", request_stop)
+    output = tmp_path / "graceful-stop"
+    report = run_cli(monkeypatch, capsys, "train", "--manifest", manifest, "--stage", "pretrain",
+                     "--device", "cpu", "--steps", "5", "--batch-size", "2",
+                     "--gradient-accumulation", "2", "--output", output)[-1]
+    assert report["status"] == "stopped" and report["step"] == 1 and called == [1, 2]
+    checkpoint = torch.load(output / "last.pt", weights_only=True)
+    assert checkpoint["step"] == 1 and checkpoint["microstep"] == 2
+    run = json.loads((output / "run.json").read_text())
+    assert run["status"] == "stopped" and run["stop_signal"] == "SIGTERM"
+    assert run["completed_step"] == 1 and run["target_step"] == 5
+    assert signal.getsignal(signal.SIGTERM) == previous_handler

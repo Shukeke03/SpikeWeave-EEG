@@ -35,6 +35,13 @@ REPRESENTATION_TRANSFER_CONFIG_EXCEPTIONS = frozenset({
     "activation_checkpointing", "biomedclip_local_path", "frontend_text_config_path",
 })
 
+# Recipe forks continue the same Stage A optimizer. Unlike a weights-only
+# stage transfer, even MCWave's coefficient patch definition must stay fixed.
+REPRESENTATION_RESUME_CONFIG_EXCEPTIONS = frozenset({
+    "denoiser_dim", "denoiser_heads", "denoiser_depth", "activation_checkpointing",
+    "biomedclip_local_path", "frontend_text_config_path",
+})
+
 
 @dataclass
 class TrainingConfig:
@@ -752,6 +759,102 @@ class Trainer:
     @classmethod
     def load(cls, path, device="cpu", resume_optimizer=False, *, allow_protocol_migration=False):
         checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+        return cls._restore_checkpoint(
+            checkpoint, device, resume_optimizer,
+            allow_protocol_migration=allow_protocol_migration,
+        )
+
+    @classmethod
+    def fork_representation_resume(cls, path, config, training, device="cpu"):
+        """Continue Stage A in a new run with an explicitly recorded batch recipe.
+
+        Only batch/accumulation, unused generator capacity, activation checkpointing
+        and local frontend paths may change. This retains the representation
+        optimizer and Torch RNG, while the caller restarts the data iterator.
+        The source checkpoint is read once and remains untouched.
+        """
+        config.validate()
+        training.validate()
+        digest = hashlib.sha256()
+        with Path(path).open("rb") as handle:
+            for block in iter(lambda: handle.read(1024**2), b""):
+                digest.update(block)
+            handle.seek(0)
+            checkpoint = torch.load(handle, map_location="cpu", weights_only=True)
+        if checkpoint.get("format_version") != 2:
+            raise ValueError("representation recipe fork requires a format-2 checkpoint")
+        source_stage = checkpoint.get("active_stage")
+        if source_stage != "pretrain":
+            raise ValueError("recipe fork only accepts pretrain representation checkpoints")
+        if (checkpoint.get("ema") is not None or
+                any(key.startswith("denoiser.") for key in checkpoint["model"])):
+            raise ValueError("representation recipe fork requires a checkpoint with no denoiser or EMA")
+        cls._checkpoint_protocol_migration(checkpoint, False)
+        source_config = ModelConfig(**checkpoint["model_config"])
+        source_config.validate()
+        source_training = TrainingConfig(**checkpoint["training_config"])
+        source_training.validate()
+        if source_training.stage != source_stage or training.stage != source_stage:
+            raise ValueError("representation recipe fork cannot change the training stage")
+
+        def canonical(value):
+            return json.loads(json.dumps(value))
+
+        source_model = canonical(source_config.to_dict())
+        target_model = canonical(config.to_dict())
+        changed_model = [key for key in target_model if source_model[key] != target_model[key]]
+        semantic_changes = set(changed_model) - REPRESENTATION_RESUME_CONFIG_EXCEPTIONS
+        if semantic_changes:
+            raise ValueError("representation recipe fork changes semantic model fields: "
+                             + ", ".join(sorted(semantic_changes)))
+        source_recipe, target_recipe = asdict(source_training), asdict(training)
+        changed_training = [key for key in target_recipe if source_recipe[key] != target_recipe[key]]
+        batch_fields = {"gradient_accumulation", "effective_batch_size"}
+        if set(changed_training) - batch_fields:
+            raise ValueError("representation recipe fork changes fixed training fields: "
+                             + ", ".join(sorted(set(changed_training) - batch_fields)))
+        source_effective_batch = source_training.effective_batch_size
+        effective_batch = training.effective_batch_size
+        if (source_effective_batch < 1 or effective_batch < 1
+                or source_effective_batch % source_training.gradient_accumulation
+                or effective_batch % training.gradient_accumulation):
+            raise ValueError("representation recipe fork requires integral microbatches at each effective batch")
+        source_step, source_microstep = checkpoint["step"], checkpoint["microstep"]
+        if (not isinstance(source_step, int) or isinstance(source_step, bool) or source_step < 0
+                or not isinstance(source_microstep, int) or isinstance(source_microstep, bool)
+                or source_microstep < 0 or source_microstep % source_training.gradient_accumulation):
+            raise ValueError("representation recipe fork requires a complete accumulation boundary")
+        trainer = cls._restore_checkpoint(
+            checkpoint, device, True, config_override=config, training_override=training,
+        )
+        # A different batch recipe can put the historical counter inside a new
+        # accumulation cycle. Rebase that operational counter explicitly, never
+        # optimizer progress; retain its actual history in the fork provenance.
+        rebased = bool(source_microstep % training.gradient_accumulation)
+        if rebased:
+            trainer.microstep = trainer.step * training.gradient_accumulation
+        trainer.run_provenance["recipe_fork"] = {
+            "checkpoint": str(Path(path).resolve()), "checkpoint_sha256": digest.hexdigest(),
+            "source_stage": source_stage, "source_optimizer_step": source_step,
+            "source_microstep": source_microstep, "resumed_microstep": trainer.microstep,
+            "microstep_counter_rebased": rebased,
+            "source_model_config": source_model, "model_config": target_model,
+            "source_training_config": source_recipe, "training_config": target_recipe,
+            "changed_model_fields": sorted(changed_model),
+            "changed_training_fields": sorted(changed_training),
+            "source_batch_size": source_effective_batch // source_training.gradient_accumulation,
+            "batch_size": effective_batch // training.gradient_accumulation,
+            "resume_data_iterator": "restart", "optimizer_resumed": True,
+            "torch_rng_resumed": True, "trajectory_equivalent": False,
+            "parent_run_provenance": copy.deepcopy(checkpoint.get("run_provenance", {})),
+        }
+        return trainer
+
+    @classmethod
+    def _restore_checkpoint(cls, checkpoint, device, resume_optimizer, *,
+                            allow_protocol_migration=False, config_override=None,
+                            training_override=None):
+        """Restore an already read checkpoint without allocating another copy."""
         if checkpoint.get("format_version") != 2:
             raise ValueError(
                 "v0.1 checkpoints cannot initialize v0.2; explicit migration/retraining required"
@@ -760,7 +863,8 @@ class Trainer:
         if migration is not None and resume_optimizer:
             raise ValueError("protocol migration loads numeric weights only; optimizer resume is forbidden")
         trainer = cls(
-            ModelConfig(**checkpoint["model_config"]),
+            config_override if config_override is not None else ModelConfig(**checkpoint["model_config"]),
+            training_override if training_override is not None else
             replace(TrainingConfig(**checkpoint["training_config"]), stage=checkpoint["active_stage"]),
             device,
         )

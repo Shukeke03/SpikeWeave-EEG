@@ -6,9 +6,12 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import platform
+import signal
 import subprocess
 import time
+from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,6 +49,24 @@ def _emit(value: dict) -> None:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+@contextmanager
+def _training_stop_request():
+    """SIGINT/SIGTERM finish the current accumulation before checkpointing."""
+    requested = {"signal": None}
+
+    def defer_stop(number, frame):
+        requested["signal"] = signal.Signals(number).name
+
+    previous = {number: signal.getsignal(number) for number in (signal.SIGINT, signal.SIGTERM)}
+    for number in previous:
+        signal.signal(number, defer_stop)
+    try:
+        yield requested
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
 
 
 def _write_run_metadata(path: Path, metadata: dict) -> None:
@@ -212,6 +233,11 @@ def train_manifest(args: argparse.Namespace) -> None:
 
     checkpoint_every = getattr(args, "checkpoint_every", 100)
     checkpoint_seconds = getattr(args, "checkpoint_seconds", 600.0)
+    fork_checkpoint = getattr(args, "fork_resume", None)
+    if sum(bool(value) for value in (args.resume, fork_checkpoint, args.init_representation)) > 1:
+        raise ValueError("resume, fork-resume and init-representation are mutually exclusive")
+    if fork_checkpoint and not args.config:
+        raise ValueError("fork-resume requires an explicit target config")
     if args.steps < 1 or args.batch_size < 1:
         raise ValueError("training steps and batch size must be positive")
     if checkpoint_every < 0 or not math.isfinite(checkpoint_seconds) or checkpoint_seconds < 0:
@@ -224,8 +250,10 @@ def train_manifest(args: argparse.Namespace) -> None:
     dualbranch = (shard_root / "dualbranch_manifest.json").is_file()
     sharded = (shard_root / "window_index.npy").is_file() and (
         data_path.is_dir() or data_path.name == "window_index.npy")
-    if args.resume:
-        trainer = Trainer.load(args.resume, device, resume_optimizer=True)
+    if args.resume or fork_checkpoint:
+        trainer = (Trainer.fork_representation_resume(
+            fork_checkpoint, _config(args), _training_config(args), device)
+            if fork_checkpoint else Trainer.load(args.resume, device, resume_optimizer=True))
         _validate_resume_options(args, trainer)
         normalizer = TrainNormalizer.from_dict(trainer.normalization) if trainer.normalization else None
         if normalizer is None:
@@ -316,13 +344,16 @@ def train_manifest(args: argparse.Namespace) -> None:
         "command", "manifest", "config", "device", "steps", "batch_size", "stage",
         "gradient_accumulation", "learning_rate", "objective", "amp", "alignment_only",
         "resume", "init_representation", "data_purpose", "balanced", "seed", "threads", "output")}
+    recorded_args["fork_resume"] = fork_checkpoint
     recorded_args["cuda_memory_fraction"] = getattr(args, "cuda_memory_fraction", None)
+    allocator_config = os.environ.get("PYTORCH_CUDA_ALLOC_CONF")
     accumulation = trainer.training.gradient_accumulation
     run = {"status": "running", "started_at": started_at, "code_commit": _code_revision(),
            "args": recorded_args, "model_config": trainer.config.to_dict(),
            "training_config": asdict(trainer.training), "stage": trainer.active_stage,
            "generator_capacity": _generator_configuration(trainer.config, trainer.active_stage),
            "representation_source": trainer.run_provenance.get("representation_initialization"),
+           "recipe_fork": trainer.run_provenance.get("recipe_fork"),
            "seed": trainer.run_provenance.get("generator_training_seed", args.seed),
            "data": {"path": str(data_path.resolve()), "train_windows": len(dataset), **source_identity},
            "batch_size": args.batch_size, "gradient_accumulation": accumulation,
@@ -330,9 +361,10 @@ def train_manifest(args: argparse.Namespace) -> None:
            "steps_semantics": "additional_optimizer_updates",
            "start_step": start_step, "requested_optimizer_updates": args.steps,
            "target_step": start_step + args.steps, "completed_step": start_step,
-           "resume_data_iterator": "restart" if args.resume else None,
+           "resume_data_iterator": "restart" if args.resume or fork_checkpoint else None,
            "checkpoint_every": checkpoint_every, "checkpoint_seconds": checkpoint_seconds,
            "cuda_memory_fraction": getattr(args, "cuda_memory_fraction", None),
+           "cuda_allocator_config": allocator_config,
            "checkpoint": str((output / "last.pt").resolve())}
     _write_run_metadata(output / "run.json", run)
     _emit({"status": "training_started", "stage": trainer.active_stage,
@@ -349,49 +381,54 @@ def train_manifest(args: argparse.Namespace) -> None:
     last_saved_step = start_step
     iterator = iter(loader)
     sampling_epoch = 0
-    for _ in range(args.steps * trainer.training.gradient_accumulation):
-        microstep_started = time.monotonic()
-        try:
-            batch = next(iterator)
-        except StopIteration:
-            sampling_epoch += 1
-            if hasattr(sampler, "set_epoch"):
-                sampler.set_epoch(sampling_epoch)
-            iterator = iter(loader)
-            batch = next(iterator)
-        metrics = trainer.train_step(batch, alignment_only=args.alignment_only)
-        now = time.monotonic()
-        updated = bool(metrics["optimizer_updated"])
-        metrics.update(elapsed_seconds=now - started, microstep_seconds=now - microstep_started,
-                       step_seconds=now - last_update_time if updated else None,
-                       sampling_epoch=sampling_epoch, target_step=run["target_step"])
-        if updated:
-            last_update_time = now
-        if device.type == "cuda":
-            metrics.update(cuda_allocated_mib=torch.cuda.memory_allocated(device) / 1024**2,
-                           cuda_reserved_mib=torch.cuda.memory_reserved(device) / 1024**2,
-                           peak_cuda_allocated_mib=torch.cuda.max_memory_allocated(device) / 1024**2,
-                           peak_cuda_reserved_mib=torch.cuda.max_memory_reserved(device) / 1024**2)
-        append_metrics(output / "metrics.jsonl", metrics)
-        _emit(metrics)
-        step_due = bool(checkpoint_every and trainer.step - last_saved_step >= checkpoint_every)
-        time_due = bool(checkpoint_seconds and now - last_saved_time >= checkpoint_seconds)
-        if updated and (step_due or time_due):
+    with _training_stop_request() as stop_request:
+        for _ in range(args.steps * trainer.training.gradient_accumulation):
+            microstep_started = time.monotonic()
+            try:
+                batch = next(iterator)
+            except StopIteration:
+                sampling_epoch += 1
+                if hasattr(sampler, "set_epoch"):
+                    sampler.set_epoch(sampling_epoch)
+                iterator = iter(loader)
+                batch = next(iterator)
+            metrics = trainer.train_step(batch, alignment_only=args.alignment_only)
+            now = time.monotonic()
+            updated = bool(metrics["optimizer_updated"])
+            metrics.update(elapsed_seconds=now - started, microstep_seconds=now - microstep_started,
+                           step_seconds=now - last_update_time if updated else None,
+                           sampling_epoch=sampling_epoch, target_step=run["target_step"])
+            if updated:
+                last_update_time = now
+            if device.type == "cuda":
+                metrics.update(cuda_allocated_mib=torch.cuda.memory_allocated(device) / 1024**2,
+                               cuda_reserved_mib=torch.cuda.memory_reserved(device) / 1024**2,
+                               peak_cuda_allocated_mib=torch.cuda.max_memory_allocated(device) / 1024**2,
+                               peak_cuda_reserved_mib=torch.cuda.max_memory_reserved(device) / 1024**2)
+            append_metrics(output / "metrics.jsonl", metrics)
+            _emit(metrics)
+            step_due = bool(checkpoint_every and trainer.step - last_saved_step >= checkpoint_every)
+            time_due = bool(checkpoint_seconds and now - last_saved_time >= checkpoint_seconds)
+            if updated and (step_due or time_due):
+                trainer.save(output / "last.pt")
+                last_saved_step, last_saved_time = trainer.step, time.monotonic()
+                run.update(completed_step=trainer.step, latest_checkpoint_step=trainer.step,
+                           latest_checkpoint_at=_utc_now(), elapsed_seconds=last_saved_time - started)
+                _write_run_metadata(output / "run.json", run)
+                _emit({"status": "checkpoint_saved", "step": trainer.step,
+                       "checkpoint": str(output / "last.pt")})
+            if updated and stop_request["signal"] is not None:
+                break
+        if last_saved_step != trainer.step:
             trainer.save(output / "last.pt")
-            last_saved_step, last_saved_time = trainer.step, time.monotonic()
-            run.update(completed_step=trainer.step, latest_checkpoint_step=trainer.step,
-                       latest_checkpoint_at=_utc_now(), elapsed_seconds=last_saved_time - started)
-            _write_run_metadata(output / "run.json", run)
-            _emit({"status": "checkpoint_saved", "step": trainer.step,
-                   "checkpoint": str(output / "last.pt")})
-    if last_saved_step != trainer.step:
-        trainer.save(output / "last.pt")
-    run.update(status="complete", completed_step=trainer.step, latest_checkpoint_step=trainer.step,
-               latest_checkpoint_at=_utc_now(), completed_at=_utc_now(),
-               elapsed_seconds=time.monotonic() - started)
-    _write_run_metadata(output / "run.json", run)
-    _emit({"status": "ok", "step": trainer.step, "train_windows": len(dataset),
-           "checkpoint": str(output / "last.pt"), "clinical_efficacy_evaluated": False})
+        run.update(status="stopped" if stop_request["signal"] else "complete",
+                   stop_signal=stop_request["signal"], completed_step=trainer.step, latest_checkpoint_step=trainer.step,
+                   latest_checkpoint_at=_utc_now(), completed_at=_utc_now(),
+                   elapsed_seconds=time.monotonic() - started)
+        _write_run_metadata(output / "run.json", run)
+        _emit({"status": "stopped" if stop_request["signal"] else "ok",
+               "step": trainer.step, "train_windows": len(dataset),
+               "checkpoint": str(output / "last.pt"), "clinical_efficacy_evaluated": False})
 
 
 def build_dualbranch(args: argparse.Namespace) -> None:
@@ -783,6 +820,7 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--sampling-steps", type=int, default=4)
         if name == "train":
             command.add_argument("--manifest", required=True)
+            command.add_argument("--fork-resume", help="continue Stage A in a new run with a recorded batch recipe")
             command.add_argument("--cuda-memory-fraction", type=float,
                                  help="CUDA allocator budget as a fraction of device memory, in (0, 1]")
             command.add_argument("--checkpoint-every", type=int, default=100,
