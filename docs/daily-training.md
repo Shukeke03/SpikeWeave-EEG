@@ -35,3 +35,9 @@ ssh -t legion 'cd /home/shuxing/workspace/SpikeWeave-EEG && watch -n 2 "python3 
 Ctrl+C仅退出监控。切换等待期可查看`controller.json`；其中`completed_step`在段退出时更新，段内最新step见`current/metrics.jsonl`。`sampling_epoch`在每个新段重新计数，不可直接当作跨段全局数据轮数。
 
 工程验证：本机280 passed、2 CUDA skips；包含20项调度测试，覆盖09/23边界、UTC时区转换、提前停机、时间跳变、完整保存、互斥锁、失败停调度与等待取消。真实两档显存分别验证；后续B/C须单独建立适合其模型的配方，不复用A的显存结论。
+
+## 实际部署记录
+
+legion同样280 passed、2 CUDA skips（测试时隐藏CUDA），plan-only确认北京时间20:50属于day80、下一边界23:00。源码`cab5c98`已推送私有GitHub；服务器GitHub连接超时期间通过校验Git bundle快进同步。
+
+2026-10-08 20:50北京时间后台控制器PID151456，训练子进程PID151458，从完整step138恢复，目标100000。首段为`0001-day80-20261008T205044`，已输出有限损失的真实微步；启动观测峰值allocated4295.65 MiB、reserved4702 MiB，配合context约79%显存。run.json标记`generator_capacity.active=false`，当前为共享A。后续PID/段目录会随规则切换变化，使用`current`监控。完成启动确认后代理停止持续监控，首次23:00实际切换结果尚未观察，边界行为已有进程控制测试覆盖。
